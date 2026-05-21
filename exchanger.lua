@@ -246,6 +246,10 @@ local function isAdmin(user)
 end
 
 local function drawLogo(x, y, color)
+    -- === НАСТРОЙКА ПОЛОЖЕНИЯ (меняйте эти числа) ===
+    local dragon_x = 8      -- отступ для DRAGON (по горизонтали)
+    local exchanger_x = 1   -- отступ для EXCHANGER (например, на 1 левее)
+    
     local dragonLines = {
         "  ██████╗ ██████╗  █████╗ ██████╗ ██╗  ██╗ ██████╗ ███╗   ██╗",
         "  ██╔══██╗██╔══██╗██╔══██╗██╔══██╗██║ ██╔╝██╔═══██╗████╗  ██║",
@@ -262,12 +266,13 @@ local function drawLogo(x, y, color)
         "███████╗██╔╝ ██╗╚██████╗██║  ██║██║  ██║██║ ╚████║╚██████╔╝███████╗██║  ██║",
         "╚══════╝╚═╝  ╚═╝ ╚═════╝╚═╝  ╚═╝╚═╝  ╚═╝╚═╝  ╚═══╝ ╚═════╝ ╚══════╝╚═╝  ╚═╝",
     }
+    
     gpu.setForeground(color)
     for i, line in ipairs(dragonLines) do
-        gpu.set(x, y + i - 1, line)
+        gpu.set(dragon_x, y + i - 1, line)
     end
     for i, line in ipairs(exchangerLines) do
-        gpu.set(x, y + 6 + i - 1, line)  -- смещаем на 6 строк ниже
+        gpu.set(exchanger_x, y + 6 + i - 1, line)
     end
 end
 
