@@ -37,7 +37,7 @@ logDebug("=== Скрипт запущен ===")
 local ore_list = {
     {
         take = { label = "Алмазная руда", name = "minecraft:diamond_ore", amount = 1 },
-        give = { label = "Алмаз", name = "minecraft:diamond",, amount = 2 }
+        give = { label = "Алмаз", name = "minecraft:diamond", amount = 2 }
     },
     {
         take = { label = "Железная руда", name = "minecraft:iron_ore", amount = 9 },
