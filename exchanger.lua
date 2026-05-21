@@ -115,34 +115,63 @@ local function clearTableArea()
 end
 
 -- Отрисовка статической части таблицы (заголовки, разделители)
+--v2.9 - Растянутая таблица, очистка строк
+-- (остальная часть кода без изменений, кроме drawStaticTable и updateAvailable)
+
 local function drawStaticTable()
-    clearTableArea() -- очищаем старые строки, чтобы не накладывались
     local line = 2 + OFFSET
+    -- Очищаем область таблицы (строки с line+1 до line+#ore_list+1)
+    for i = 1, #ore_list + 2 do
+        gpu.fill(1, line + i - 1, w, 1, " ")
+    end
     for i, ore in pairs(ore_list) do
         local print_row = line + i
+        -- Очищаем строку от возможного мусора
+        gpu.fill(1, print_row, w, 1, " ")
+        
+        -- Название руды (берём)
+        gpu.setForeground(0x00ff00)
+        gpu.set(3, print_row, ore.take.label)
+        
+        -- Количество руды (вправо)
         gpu.setForeground(0xFF00FF)
         local takeAmount = formatNumber(ore.take.amount)
         gpu.set(29 - #takeAmount, print_row, takeAmount)
-        gpu.set(33, print_row, formatNumber(ore.give.amount))
-        gpu.setForeground(0x00ff00)
-        gpu.set(5, print_row, ore.take.label)
-        gpu.set(42, print_row, ore.give.label)
+        
+        -- Стрелка
         gpu.setForeground(0xFFFF00)
-        gpu.set(30, print_row, unicode.char(0xFF1E))
+        gpu.set(32, print_row, unicode.char(0xFF1E))
+        
+        -- Количество слитков (give.amount)
+        gpu.setForeground(0xFF00FF)
+        local giveAmount = formatNumber(ore.give.amount)
+        gpu.set(35 - #giveAmount, print_row, giveAmount)
+        
+        -- Название слитка
+        gpu.setForeground(0x00ff00)
+        gpu.set(42, print_row, ore.give.label)
+        
+        -- Текст "Доступно:"
+        gpu.setForeground(0xFFFF00)
         gpu.set(63, print_row, "Доступно:")
-        gpu.setForeground(0x202020)
-        gpu.set(2, print_row + 1, string.rep("═", w - 2))
+        
+        -- Разделитель (линия под названиями) -- рисуем только для первой строки один раз
+        if i == 1 then
+            gpu.setForeground(0x202020)
+            gpu.set(2, print_row + 1, string.rep("═", w - 4))
+        end
     end
 end
 
--- Обновление только колонки "Доступно"
 local function updateAvailable()
     local line = 2 + OFFSET
     for i, ore in pairs(ore_list) do
         local print_row = line + i
-        gpu.fill(73, print_row, w - 73, 1, " ")
+        -- Очищаем область "Доступно" перед записью
+        gpu.fill(70, print_row, w - 70, 1, " ")
         gpu.setForeground(0xFF00FF)
-        gpu.set(73, print_row, formatNumber(ore.size or 0))
+        local available = formatNumber(ore.size or 0)
+        gpu.set(72 - #available, print_row, available)
     end
 end
 
