@@ -1,4 +1,4 @@
---v2.5 - Центрированный логотип, растянутая таблица
+--v2.4 - Оптимизированная версия с новым дизайном
 local unicode = require("unicode")
 local computer = require("computer")
 local com = require("component")
@@ -21,11 +21,10 @@ local defBG, defFG = gpu.getBackground(), gpu.getForeground()
 gpu.setResolution(w, h)
 
 -- НАСТРОЙКИ
-local EXPORT_DIR = "UP"
-local PUSH_DIR = "DOWN"
-local STATS_FILE = "exchanger_stats.txt"
-local accent = 0x00E5C9
-local LOGO_HEIGHT = 6          -- высота логотипа в строках
+local EXPORT_DIR = "UP"          -- направление выдачи слитков (UP, DOWN, NORTH и т.д.)
+local PUSH_DIR = "DOWN"          -- направление выталкивания руды
+local STATS_FILE = "exchanger_stats.txt"   -- файл для статистики
+local accent = 0x00E5C9          -- цвет логотипа
 
 -- Таблица с рудами (damage не указан -> будет 0)
 local ore_list = {
@@ -63,10 +62,10 @@ local function saveOres(ores)
     io.open(oresPath, "w"):write(inspect(ores)):close()
 end
 
-local function center(y, text, color)
-    gpu.fill(1, y, w, 1, " ")
+local function center(height, text, color)
+    gpu.fill(1, height, w, 1, " ")
     gpu.setForeground(color)
-    gpu.set(math.floor(w / 2 - unicode.len(text) / 2), y, text)
+    gpu.set(math.floor(w / 2 - unicode.len(text) / 2), height, text)
 end
 
 local function formatNumber(num)
@@ -104,63 +103,43 @@ local function updIngotsSize()
     return totalOre > 0
 end
 
--- Рисуем статическую таблицу (заголовки, линии, названия)
-local function drawStaticTable()
-    local line = 2 + LOGO_HEIGHT   -- после логотипа
-    -- Очищаем область таблицы
-    for i = 1, #ore_list + 2 do
-        gpu.fill(1, line + i - 1, w, 1, " ")
+local function drawInfo(type)
+    local line = 2
+    if type == "full" then
+        gpu.fill(1, 1, w, h - 16, " ")
     end
     for i, ore in pairs(ore_list) do
         local print_row = line + i
-        gpu.fill(1, print_row, w, 1, " ")
-        -- Название руды
-        gpu.setForeground(0x00ff00)
-        gpu.set(3, print_row, ore.take.label)
-        -- Количество руды
-        gpu.setForeground(0xFF00FF)
-        local takeAmount = formatNumber(ore.take.amount)
-        gpu.set(28 - #takeAmount, print_row, takeAmount)
-        -- Стрелка
-        gpu.setForeground(0xFFFF00)
-        gpu.set(31, print_row, unicode.char(0xFF1E))
-        -- Количество слитков
-        gpu.setForeground(0xFF00FF)
-        local giveAmount = formatNumber(ore.give.amount)
-        gpu.set(34 - #giveAmount, print_row, giveAmount)
-        -- Название слитка
-        gpu.setForeground(0x00ff00)
-        gpu.set(40, print_row, ore.give.label)
-        -- Текст "Доступно:"
-        gpu.setForeground(0xFFFF00)
-        gpu.set(63, print_row, "Доступно:")
-        -- Разделительная линия под первой строкой
-        if i == 1 then
+        if type == "full" then
+            gpu.setForeground(0xFF00FF)
+            local takeAmount = formatNumber(ore.take.amount)
+            gpu.set(29 - #takeAmount, print_row, takeAmount)
+            gpu.set(33, print_row, formatNumber(ore.give.amount))
+            gpu.setForeground(0x00ff00)
+            gpu.set(5, print_row, ore.take.label)
+            gpu.set(42, print_row, ore.give.label)
+            gpu.setForeground(0xFFFF00)
+            gpu.set(30, print_row, unicode.char(0xFF1E))
+            gpu.set(63, print_row, "Доступно:")
             gpu.setForeground(0x202020)
-            gpu.set(2, print_row + 1, string.rep("═", w - 4))
+            gpu.set(2, print_row + 1, string.rep("═", w - 2))
         end
+        if type == "full" or type == "ingots" then
+            gpu.fill(73, print_row, w - 73, 1, " ")
+            gpu.setForeground(0xFF00FF)
+            gpu.set(73, print_row, formatNumber(ore.size or 0))
+        end
+        line = line + 1
     end
 end
 
--- Обновление только колонки "Доступно"
-local function updateAvailable()
-    local line = 2 + LOGO_HEIGHT
-    for i, ore in pairs(ore_list) do
-        local print_row = line + i
-        gpu.fill(70, print_row, w - 70, 1, " ")
-        gpu.setForeground(0xFF00FF)
-        local available = formatNumber(ore.size or 0)
-        gpu.set(74 - #available, print_row, available)
-    end
-end
-
-local function updInfo()
+local function updInfo(type)
+    type = type or "full"
     local check = updIngotsSize()
     if not check then
-        center(h - 4, "Нет соединения с МЭ или руды не настроены", 0xff0000)
-    else
-        updateAvailable()
+        center(h - 15, "Нет соединения с МЭ или руды не настроены", 0xff0000)
     end
+    drawInfo(type)
     return check
 end
 
@@ -184,10 +163,9 @@ local function giveIngot(toGive, ore, index)
             totalGive = totalGive + res.size
             ore_list[index].size = ore_list[index].size - res.size
             stats.ingots = stats.ingots + res.size
-            updateAvailable()
         else
-            center(h - 4, "Ошибка выдачи слитков! Проверьте место в инвентаре и направление.", 0xff0000)
-            center(h - 3, string.format("Ожидаю выдать %d %s", toGive - totalGive, ore.give.label), 0xFFFFFF)
+            center(h - 15, "Ошибка выдачи слитков! Проверьте место в инвентаре и направление.", 0xff0000)
+            center(h - 14, string.format("Ожидаю выдать %d %s", toGive - totalGive, ore.give.label), 0xFFFFFF)
             os.sleep(1)
         end
     end
@@ -196,7 +174,7 @@ end
 local function exchangeOre(slot, ore, index)
     local curSlot = pim.getStackInSlot(slot)
     if not curSlot then
-        center(h - 3, "Вы сошли с PIM, обмен прерван.", 0xff0000)
+        center(h - 14, "Вы сошли с PIM, обмен прерван.", 0xff0000)
         os.sleep(1)
         return false
     end
@@ -206,29 +184,30 @@ local function exchangeOre(slot, ore, index)
     local giveSize = (takeSize / ore.take.amount) * ore.give.amount
 
     if ore.size < giveSize then
-        center(h - 3, string.format("%s недостаточно для обмена (в МЭ %d, надо %d)", ore.give.label, ore.size, giveSize), 0xff0000)
+        center(h - 14, string.format("%s недостаточно для обмена (в МЭ %d, надо %d)", ore.give.label, ore.size, giveSize), 0xff0000)
         os.sleep(2)
         return false
     end
 
     local takedOre = pim.pushItem(PUSH_DIR, slot, takeSize)
     if not takedOre or takedOre == 0 then
-        center(h - 3, "Не удалось вытолкнуть руду. Проверьте, что снизу есть ME интерфейс.", 0xff0000)
+        center(h - 14, "Не удалось вытолкнуть руду. Проверьте, что снизу есть ME интерфейс.", 0xff0000)
         os.sleep(2)
         return false
     end
 
     local actualGive = math.floor(takedOre / ore.take.amount) * ore.give.amount
     stats.ores = stats.ores + takedOre
-    center(h - 3, string.format("Меняю %d %s на %d %s", takedOre, ore.take.label, actualGive, ore.give.label), 0xffffff)
+    center(h - 14, string.format("Меняю %d %s на %d %s", takedOre, ore.take.label, actualGive, ore.give.label), 0xffffff)
     giveIngot(actualGive, ore, index)
-    gpu.fill(1, h - 3, w, 1, " ")
+    gpu.fill(1, h - 14, w, 1, " ")
     return true
 end
 
 local function checkInventory()
+    -- Небольшая задержка перед началом
     for i = 2, 1, -1 do
-        center(h - 3, string.format("Обмен через %d сек...", i), 0x505050)
+        center(h - 14, string.format("Обмен через %d сек...", i), 0x505050)
         os.sleep(1)
     end
     local size = pim.getInventorySize()
@@ -248,8 +227,9 @@ local function checkInventory()
             end
         end
     end
-    updateAvailable()
-    center(h - 4, string.format("Обмен окончен! Переработано: %d руды → %d слитков", stats.ores, stats.ingots), 0xffffff)
+    drawInfo("ingots")
+    -- Выводим итоговую статистику
+    center(h - 15, string.format("Обмен окончен! Переработано: %d руды → %d слитков", stats.ores, stats.ingots), 0xffffff)
     saveStats()
     if pim.getInventoryName() ~= "pim" then
         return checkInventory()
@@ -265,34 +245,18 @@ local function isAdmin(user)
     return false
 end
 
--- Центрированный логотип (два слова: DRAGON и EXCHANGER)
-local function drawCenteredLogo(y, color)
-    local dragonLines = {
-        "██████╗ ██████╗  █████╗ ██████╗ ██╗  ██╗ ██████╗ ███╗   ██╗",
-        "██╔══██╗██╔══██╗██╔══██╗██╔══██╗██║ ██╔╝██╔═══██╗████╗  ██║",
-        "██║  ██║██████╔╝███████║██║  ██║█████╔╝ ██║   ██║██╔██╗ ██║",
-        "██║  ██║██╔══██╗██╔══██║██║  ██║██╔═██╗ ██║   ██║██║╚██╗██║",
-        "██████╔╝██║  ██║██║  ██║██████╔╝██║  ██╗╚██████╔╝██║ ╚████║",
-        "╚═════╝ ╚═╝  ╚═╝╚═╝  ╚═╝╚═════╝ ╚═╝  ╚═╝ ╚═════╝ ╚═╝  ╚═══╝"
+local function drawLogo(x, y, color)
+    local lines = {
+      "  ██████╗ ██████╗  █████╗ ██████╗ ██╗  ██╗ ██████╗ ███╗   ██╗",
+      "  ██╔══██╗██╔══██╗██╔══██╗██╔══██╗██║ ██╔╝██╔═══██╗████╗  ██║",
+      "  ██║  ██║██████╔╝███████║██║  ██║█████╔╝ ██║   ██║██╔██╗ ██║",
+      "  ██║  ██║██╔══██╗██╔══██║██║  ██║██╔═██╗ ██║   ██║██║╚██╗██║",
+      "  ██████╔╝██║  ██║██║  ██║██████╔╝██║  ██╗╚██████╔╝██║ ╚████║",
+      "  ╚═════╝ ╚═╝  ╚═╝╚═╝  ╚═╝╚═════╝ ╚═╝  ╚═╝ ╚═════╝ ╚═╝  ╚═══╝",
     }
-    local exchangerLines = {
-        "███████╗██╗  ██╗ ██████╗██╗  ██╗ █████╗ ███╗   ██╗ ██████╗ ███████╗██████╗ ",
-        "██╔════╝╚██╗██╔╝██╔════╝██║  ██║██╔══██╗████╗  ██║██╔════╝ ██╔════╝██╔══██╗",
-        "█████╗   ╚███╔╝ ██║     ███████║███████║██╔██╗ ██║██║  ███╗█████╗  ██████╔╝",
-        "██╔══╝   ██╔██╗ ██║     ██╔══██║██╔══██║██║╚██╗██║██║   ██║██╔══╝  ██╔══██╗",
-        "███████╗██╔╝ ██╗╚██████╗██║  ██║██║  ██║██║ ╚████║╚██████╔╝███████╗██║  ██║",
-        "╚══════╝╚═╝  ╚═╝ ╚═════╝╚═╝  ╚═╝╚═╝  ╚═╝╚═╝  ╚═══╝ ╚═════╝ ╚══════╝╚═╝  ╚═╝"
-    }
-    local maxWidth = 0
-    for _, l in ipairs(dragonLines) do maxWidth = math.max(maxWidth, unicode.len(l)) end
-    for _, l in ipairs(exchangerLines) do maxWidth = math.max(maxWidth, unicode.len(l)) end
-    local startX = math.floor((w - maxWidth) / 2)
     gpu.setForeground(color)
-    for i, line in ipairs(dragonLines) do
-        gpu.set(startX, y + i - 1, line)
-    end
-    for i, line in ipairs(exchangerLines) do
-        gpu.set(startX, y + LOGO_HEIGHT + i - 1, line)
+    for i, line in ipairs(lines) do
+        gpu.set(x, y + i - 1, line)
     end
 end
 
@@ -305,22 +269,23 @@ local function handleEvent(eventName, ...)
         os.exit()
         return true
     elseif eventName == "player_on" then
-        if not updInfo() then return end
-        center(h - 4, string.format("Приветствую, %s! Начинаю обмен", args[1]), 0xffffff)
+        if not updInfo("ingots") then return end
+        center(h - 15, string.format("Приветствую, %s! Начинаю обмен", args[1]), 0xffffff)
+        -- Сбрасываем статистику для новой сессии
         stats.ores = 0
         stats.ingots = 0
         checkInventory()
     elseif eventName == "player_off" then
-        if not updInfo() then return end
-        center(h - 4, "Для обмена встаньте на PIM и не сходите до окончания обмена", 0xffffff)
-        center(h - 3, "Обновлю доступные руды и связь с МЭ как только наступите", 0x505050)
+        if not updInfo("ingots") then return end
+        center(h - 15, "Для обмена встаньте на PIM и не сходите до окончания обмена", 0xffffff)
+        center(h - 14, "Обновлю доступные руды и связь с МЭ как только наступите", 0x505050)
     elseif eventName == "touch" and args[2] >= w - 38 and args[3] >= h - 1 and isAdmin(args[5]) then
         computer.beep(1500, 0.1)
         for i = 5, 1, -1 do
-            center(h - 3, string.format("Начну сканировать инвентарь через %d сек...", i), 0x505050)
+            center(h - 14, string.format("Начну сканировать инвентарь через %d сек...", i), 0x505050)
             os.sleep(1)
         end
-        center(h - 3, "Сканирую...", 0xffffff)
+        center(h - 14, "Сканирую...", 0xffffff)
         computer.beep(1500, 0.8)
         if pim.getInventoryName() ~= "pim" then
             ore_list = {}
@@ -339,34 +304,30 @@ local function handleEvent(eventName, ...)
                 i = i + 2
             end
             saveOres(ore_list)
-            center(h - 3, "Обмен записан!", 0x00ff00)
+            center(h - 14, "Обмен записан!", 0x00ff00)
             computer.beep(500, 0.2)
-            -- Перерисовываем экран
-            gpu.fill(1, 1, w, h, " ")
-            drawCenteredLogo(1, accent)
-            drawStaticTable()
             updInfo()
         else
-            center(h - 3, "Не увидел инвентарь!", 0xff0000)
+            center(h - 14, "Не увидел инвентарь!", 0xff0000)
             computer.beep(2000, 0.2)
             computer.beep(2000, 0.2)
         end
         os.sleep(1)
         for i = 5, 1, -1 do
-            center(h - 3, string.format("Заработаю через %d сек...", i), 0x505050)
+            center(h - 14, string.format("Заработаю через %d сек...", i), 0x505050)
             os.sleep(1)
         end
-        center(h - 3, "Обновлю доступные руды и связь с МЭ как только наступите", 0x505050)
+        center(h - 14, "Обновлю доступные руды и связь с МЭ как только наступите", 0x505050)
     end
 end
 
 local function main()
     gpu.fill(1, 1, w, h, " ")
-    drawCenteredLogo(1, accent)
-    drawStaticTable()
-    updInfo()
-    center(h - 4, "Для обмена встаньте на PIM и не сходите до окончания обмена", 0xffffff)
-    center(h - 3, "Обновлю доступные руды и связь с МЭ как только наступите", 0x505050)
+    if updInfo() then
+        center(h - 15, "Для обмена встаньте на PIM и не сходите до окончания обмена", 0xffffff)
+    end
+    center(h - 14, "Обновлю доступные руды и связь с МЭ как только наступите", 0x505050)
+    drawLogo(7, h - 12, accent)   -- рисуем логотип внизу (строки 5)
     while true do
         handleEvent(event.pull(1))
     end
