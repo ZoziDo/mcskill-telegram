@@ -1,4 +1,4 @@
---v2.8 - Фикс: логотип и таблица не затираются
+--v2.9 - Исправлено наложение таблицы, смещение логотипа
 local unicode = require("unicode")
 local computer = require("computer")
 local com = require("component")
@@ -105,8 +105,18 @@ local function updIngotsSize()
     return totalOre > 0
 end
 
+-- Очистка области таблицы перед перерисовкой
+local function clearTableArea()
+    local startLine = 2 + OFFSET
+    local endLine = startLine + #ore_list + 1 -- +1 на разделитель
+    for y = startLine, endLine do
+        gpu.fill(1, y, w, 1, " ")
+    end
+end
+
 -- Отрисовка статической части таблицы (заголовки, разделители)
 local function drawStaticTable()
+    clearTableArea() -- очищаем старые строки, чтобы не накладывались
     local line = 2 + OFFSET
     for i, ore in pairs(ore_list) do
         local print_row = line + i
@@ -165,7 +175,7 @@ local function giveIngot(toGive, ore, index)
             totalGive = totalGive + res.size
             ore_list[index].size = ore_list[index].size - res.size
             stats.ingots = stats.ingots + res.size
-            updateAvailable()  -- обновляем сразу цифры на экране
+            updateAvailable()
         else
             center(h - 4, "Ошибка выдачи слитков! Проверьте место в инвентаре и направление.", 0xff0000)
             center(h - 3, string.format("Ожидаю выдать %d %s", toGive - totalGive, ore.give.label), 0xFFFFFF)
@@ -246,7 +256,7 @@ local function isAdmin(user)
     return false
 end
 
--- Центрированный логотип (два слова DRAGON и EXCHANGER)
+-- Центрированный логотип со смещением: DRAGON на 2 влево, EXCHANGER на 1 влево
 local function drawCenteredLogo()
     local dragonLines = {
         "██████╗ ██████╗  █████╗ ██████╗ ██╗  ██╗ ██████╗ ███╗   ██╗",
@@ -265,14 +275,15 @@ local function drawCenteredLogo()
         "╚══════╝╚═╝  ╚═╝ ╚═════╝╚═╝  ╚═╝╚═╝  ╚═╝╚═╝  ╚═══╝ ╚═════╝ ╚══════╝╚═╝  ╚═╝"
     }
     local maxWidth = 66
-    local startX = math.floor((w - maxWidth) / 2)
+    local startXDragon = math.floor((w - maxWidth) / 2) - 2   -- смещаем DRAGON влево на 2
+    local startXExchanger = math.floor((w - maxWidth) / 2) - 1 -- смещаем EXCHANGER влево на 1
     local startY = 1
     gpu.setForeground(accent)
     for i, line in ipairs(dragonLines) do
-        gpu.set(startX, startY + i - 1, line)
+        gpu.set(startXDragon, startY + i - 1, line)
     end
     for i, line in ipairs(exchangerLines) do
-        gpu.set(startX, startY + 6 + i - 1, line)
+        gpu.set(startXExchanger, startY + 6 + i - 1, line)
     end
 end
 
@@ -321,11 +332,13 @@ local function handleEvent(eventName, ...)
             saveOres(ore_list)
             center(h - 3, "Обмен записан!", 0x00ff00)
             computer.beep(500, 0.2)
-            -- Перерисовываем статическую таблицу и обновляем доступное
+            -- Полная перерисовка экрана
             gpu.fill(1, 1, w, h, " ")
             drawCenteredLogo()
             drawStaticTable()
             updInfo()
+            center(h - 4, "Для обмена встаньте на PIM и не сходите до окончания обмена", 0xffffff)
+            center(h - 3, "Обновлю доступные руды и связь с МЭ как только наступите", 0x505050)
         else
             center(h - 3, "Не увидел инвентарь!", 0xff0000)
             computer.beep(2000, 0.2)
@@ -343,8 +356,8 @@ end
 local function main()
     gpu.fill(1, 1, w, h, " ")
     drawCenteredLogo()
-    drawStaticTable()       -- рисуем заголовки и рамки один раз
-    updInfo()               -- обновляем цифры доступного
+    drawStaticTable()
+    updInfo()
     center(h - 4, "Для обмена встаньте на PIM и не сходите до окончания обмена", 0xffffff)
     center(h - 3, "Обновлю доступные руды и связь с МЭ как только наступите", 0x505050)
     while true do
