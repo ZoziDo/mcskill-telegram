@@ -29,17 +29,17 @@ local accent = 0x00E5C9          -- цвет логотипа
 -- Таблица с рудами (damage не указан -> будет 0)
 local ore_list = {
     { take = { label = "Алмазная руда", name = "minecraft:diamond_ore", amount = 1 }, give = { label = "Алмаз", name = "minecraft:diamond", amount = 2 } },
-    { take = { label = "Железная руда", name = "minecraft:iron_ore", amount = 9 }, give = { label = "Железный слиток", name = "minecraft:iron_ingot", amount = 22 } },
-    { take = { label = "Золотая руда", name = "minecraft:gold_ore", amount = 9 }, give = { label = "Золотой слиток", name = "minecraft:gold_ingot", amount = 22 } },
-    { take = { label = "Лазуритовая руда", name = "minecraft:lapis_ore", amount = 1 }, give = { label = "Лазурит", name = "minecraft:dye", damage = 4.0, amount = 12 } },
+    { take = { label = "Железная руда", name = "minecraft:iron_ore", amount = 3 }, give = { label = "Железный слиток", name = "minecraft:iron_ingot", amount = 7 } },
+    { take = { label = "Золотая руда", name = "minecraft:gold_ore", amount = 3 }, give = { label = "Золотой слиток", name = "minecraft:gold_ingot", amount = 7 } },
+    { take = { label = "Лазуритовая руда", name = "minecraft:lapis_ore", amount = 1 }, give = { label = "Лазурит", name = "minecraft:dye", damage = 4.0, amount = 7 } },
     { take = { label = "Красная руда", name = "minecraft:redstone_ore", amount = 1 }, give = { label = "Блок красного камня", name = "minecraft:redstone_block", amount = 1 } },
     { take = { label = "Угольная руда", name = "minecraft:coal_ore", amount = 1 }, give = { label = "Уголь", name = "minecraft:coal", amount = 3 } },
     { take = { label = "Руда истинного кварца", name = "appliedenergistics2:tile.OreQuartz", amount = 1 }, give = { label = "Кристалл ист. кварца", name = "appliedenergistics2:item.ItemMultiMaterial", amount = 3 } },
     { take = { label = "Заряж. руда ист. квар", name = "appliedenergistics2:tile.OreQuartzCharged", amount = 1 }, give = { label = "Заряж. крист. кварца", name = "appliedenergistics2:item.ItemMultiMaterial", damage = 1.0, amount = 3 } },
     { take = { label = "Кварцевая руда", name = "minecraft:quartz_ore", amount = 1 }, give = { label = "Кварц", name = "minecraft:quartz", amount = 4 } },
-    { take = { label = "Медная руда", name = "IC2:blockOreCopper", amount = 9 }, give = { label = "Медный слиток", name = "IC2:itemIngot", amount = 22 } },
-    { take = { label = "Оловянная руда", name = "IC2:blockOreTin", amount = 9 }, give = { label = "Оловянный слиток", name = "IC2:itemIngot", damage = 1.0, amount = 22 } },
-    { take = { label = "Серебряная руда", name = "ThermalFoundation:Ore", damage = 2.0, amount = 7 }, give = { label = "Серебрянный слиток", name = "IC2:itemIngot", damage = 6.0, amount = 22 } },
+    { take = { label = "Медная руда", name = "IC2:blockOreCopper", amount = 3 }, give = { label = "Медный слиток", name = "IC2:itemIngot", amount = 7 } },
+    { take = { label = "Оловянная руда", name = "IC2:blockOreTin", amount = 3 }, give = { label = "Оловянный слиток", name = "IC2:itemIngot", damage = 1.0, amount = 7 } },
+    { take = { label = "Серебряная руда", name = "ThermalFoundation:Ore", damage = 2.0, amount = 1 }, give = { label = "Серебрянный слиток", name = "IC2:itemIngot", damage = 6.0, amount = 2 } },
     { take = { label = "Платиновая руда", name = "ThermalFoundation:Ore", damage = 5.0, amount = 1 }, give = { label = "Измельчённая платина", name = "ThermalFoundation:material", damage = 37.0, amount = 2 } },
     { take = { label = "Никелевая руда", name = "ThermalFoundation:Ore", damage = 4.0, amount = 1 }, give = { label = "Никелевый слиток", name = "ThermalFoundation:material", damage = 68.0, amount = 2 } },
     { take = { label = "Дракониевая руда", name = "DraconicEvolution:draconiumOre", amount = 1 }, give = { label = "Дракониевая пыль", name = "DraconicEvolution:draconiumDust", amount = 2 } }
@@ -247,8 +247,8 @@ end
 
 local function drawLogo(x, y, color)
     -- === НАСТРОЙКА ПОЛОЖЕНИЯ (меняйте эти числа) ===
-    local dragon_x = 8      -- отступ для DRAGON (по горизонтали)
-    local exchanger_x = 1   -- отступ для EXCHANGER (например, на 1 левее)
+    local dragon_x = 9      -- отступ для DRAGON (по горизонтали)
+    local exchanger_x = 4   -- отступ для EXCHANGER (например, на 1 левее)
     
     local dragonLines = {
         "  ██████╗ ██████╗  █████╗ ██████╗ ██╗  ██╗ ██████╗ ███╗   ██╗",
