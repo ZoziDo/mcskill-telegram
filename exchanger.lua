@@ -1,4 +1,4 @@
---v2.3 - FIXED: export without direction, damage defaults to 0
+--v2.4 - DARKON EDITION: auto direction, big title, stats, progress
 local unicode = require("unicode")
 local computer = require("computer")
 local com = require("component")
@@ -20,7 +20,23 @@ local w, h = 80, 50
 local defBG, defFG = gpu.getBackground(), gpu.getForeground()
 gpu.setResolution(w, h)
 
--- Таблица с рудами (damage не указан -> будет 0)
+-- Цвета
+local accent = 0x00E5C9
+
+-- ========== НАПРАВЛЕНИЕ ВЫДАЧИ (автоопределение) ==========
+local exportDirection = nil
+local function detectExportDirection()
+    local directions = {"UP", "DOWN", "NORTH", "SOUTH", "WEST", "EAST"}
+    for _, dir in ipairs(directions) do
+        local success, res = pcall(me.exportItem, {id="minecraft:stone", dmg=0}, dir, 1)
+        if success and res and res.size and res.size > 0 then
+            return dir
+        end
+    end
+    return "UP"  -- фолбэк
+end
+
+-- ========== ТАБЛИЦА ОБМЕНА ==========
 local ore_list = {
     { take = { label = "Алмазная руда", name = "minecraft:diamond_ore", amount = 1 }, give = { label = "Алмаз", name = "minecraft:diamond", amount = 2 } },
     { take = { label = "Железная руда", name = "minecraft:iron_ore", amount = 9 }, give = { label = "Железный слиток", name = "minecraft:iron_ingot", amount = 22 } },
@@ -56,6 +72,7 @@ local function saveOres(ores)
     io.open(oresPath, "w"):write(inspect(ores)):close()
 end
 
+-- ========== ВСПОМОГАТЕЛЬНЫЕ ФУНКЦИИ ==========
 local function center(height, text, color)
     gpu.fill(1, height, w, 1, " ")
     gpu.setForeground(color)
@@ -77,6 +94,37 @@ local function formatNumber(num)
     return formattedNum .. symbols[symbolIndex]
 end
 
+-- ========== КРУПНАЯ НАДПИСЬ ==========
+local function drawBigTitle()
+    gpu.setForeground(accent)
+    local darkonLines = {
+        "  ██████╗ ██████╗  █████╗ ██████╗ ██╗  ██╗ ██████╗ ███╗   ██╗",
+        "  ██╔══██╗██╔══██╗██╔══██╗██╔══██╗██║ ██╔╝██╔═══██╗████╗  ██║",
+        "  ██║  ██║██████╔╝███████║██║  ██║█████╔╝ ██║   ██║██╔██╗ ██║",
+        "  ██║  ██║██╔══██╗██╔══██║██║  ██║██╔═██╗ ██║   ██║██║╚██╗██║",
+        "  ██████╔╝██║  ██║██║  ██║██████╔╝██║  ██╗╚██████╔╝██║ ╚████║",
+    }
+    local darkonOffset = 47
+    local darkonX = math.floor((80 - #darkonLines[1]) / 2) + darkonOffset
+    for i, line in ipairs(darkonLines) do
+        gpu.set(darkonX, 4 + i, line)
+    end
+
+    local shopLines = {
+        "  ███████╗ ██╗  ██╗  ██████╗  ██████╗ ",
+        "  ██╔════╝ ██║  ██║ ██╔═══██╗ ██╔══██╗",
+        "  ███████╗ ███████║ ██║   ██║ ██████╔╝",
+        "  ╚════██║ ██╔══██║ ██║   ██║ ██╔═══╝ ",
+        "  ███████║ ██║  ██║ ╚██████╔╝ ██║     "
+    }
+    local shopOffset = 28
+    local shopX = math.floor((80 - #shopLines[1]) / 2) + shopOffset
+    for i, line in ipairs(shopLines) do
+        gpu.set(shopX, 10 + i, line)
+    end
+end
+
+-- ========== РАБОТА С МЭ ==========
 local function updIngotsSize()
     if #ore_list < 1 then return false end
     local totalOre = 0
@@ -101,9 +149,10 @@ local function drawInfo(type)
     local line = 2
     if type == "full" then
         gpu.fill(1, 1, w, h - 16, " ")
+        drawBigTitle() -- рисуем шапку после очистки
     end
     for i, ore in pairs(ore_list) do
-        local print_row = line + i
+        local print_row = line + i + 12 -- сдвиг вниз, чтобы не перекрывать заголовок
         if type == "full" then
             gpu.setForeground(0xFF00FF)
             local takeAmount = formatNumber(ore.take.amount)
@@ -123,7 +172,6 @@ local function drawInfo(type)
             gpu.setForeground(0xFF00FF)
             gpu.set(73, print_row, formatNumber(ore.size or 0))
         end
-        line = line + 1
     end
 end
 
@@ -137,13 +185,13 @@ local function updInfo(type)
     return check
 end
 
+-- ========== ВЫДАЧА СЛИТКОВ ==========
 local function giveIngot(toGive, ore, index)
     local totalGive = 0
     local giveDamage = ore.give.damage or 0
     while totalGive < toGive do
         local giveSize = math.min(toGive - totalGive, ore.maxSize)
-        -- Убираем направление "UP" - пусть адаптер сам определяет сторону
-        local success, res = pcall(me.exportItem, { id = ore.give.name, dmg = giveDamage }, "UP", giveSize)
+        local success, res = pcall(me.exportItem, { id = ore.give.name, dmg = giveDamage }, exportDirection, giveSize)
         if success and res and res.size and res.size > 0 then
             totalGive = totalGive + res.size
             ore_list[index].size = ore_list[index].size - res.size
@@ -155,6 +203,7 @@ local function giveIngot(toGive, ore, index)
     end
 end
 
+-- ========== ОБМЕН РУДЫ ==========
 local function exchangeOre(slot, ore, index)
     local curSlot = pim.getStackInSlot(slot)
     if not curSlot then
@@ -187,6 +236,7 @@ local function exchangeOre(slot, ore, index)
     return true
 end
 
+-- ========== ОСНОВНАЯ ФУНКЦИЯ ОБМЕНА ==========
 local function checkInventory()
     for i = 2, 1, -1 do
         center(h - 14, string.format("Обмен через %d сек...", i), 0x505050)
@@ -195,9 +245,15 @@ local function checkInventory()
     local size = pim.getInventorySize()
     local data = pim.getAllStacks(0)
     local forceBreak = false
+    local totalSlots = 0
+    for slot = 1, size do if data[slot] then totalSlots = totalSlots + 1 end end
+    local processed = 0
     for slot = 1, size do
         if forceBreak then break end
         if data[slot] then
+            processed = processed + 1
+            local percent = math.floor(processed / totalSlots * 100)
+            center(h - 15, string.format("Прогресс: %d%% (%d/%d слотов)", percent, processed, totalSlots), 0xFFFFFF)
             for index, ore in pairs(ore_list) do
                 local needDamage = ore.take.damage or 0
                 if data[slot].id == ore.take.name and data[slot].dmg == needDamage then
@@ -210,6 +266,7 @@ local function checkInventory()
         end
     end
     drawInfo("ingots")
+    computer.beep(1000, 0.3) -- звук окончания
     if pim.getInventoryName() ~= "pim" then
         center(h - 15, "Обмен окончен! Приходите ещё!", 0xffffff)
         return checkInventory()
@@ -218,6 +275,7 @@ local function checkInventory()
     end
 end
 
+-- ========== АДМИНИСТРИРОВАНИЕ ==========
 local function isAdmin(user)
     for _, adminUser in pairs(table.pack(computer.users())) do
         if adminUser == user then return true end
@@ -283,39 +341,16 @@ local function handleEvent(eventName, ...)
     end
 end
 
-local function drawDescription(x, y, fore)
-    local img = [[
-⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⢀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀
-⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⢀⡐⢆⠆⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀
-⠀⠀⠀⠀⠀⠀⠀⠀⠀⡀⠀⠀⠀⠀⠀⠀⠀⢀⠀⠠⡐⣄⢢⡐⢄⢢⡐⣄⠂⡄⠀⠀⢄⢢⢰⣀⢦⡐⣄⢢⡐⠄⣂⠆⠀⠀⢀⡐⢦⠹⠌⠀⢀⡰⢠⠀⠐⣠⠀⠀⠀⠀⠀⠀⠀⠀⠄⡐⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀
-⠀⠀⠀⠀⠀⠀⠀⠀⠀⢡⠂⡄⠀⠀⠀⠀⠌⡤⠃⠀⢳⡌⠃⠘⠈⠂⠑⠈⠑⠀⠀⡜⡢⠍⠂⠑⠈⠑⠈⠃⠀⠐⣌⠎⢀⡐⠦⣜⠂⠁⠀⠀⠀⡜⡡⠂⠘⠤⡁⠀⠀⠀⠀⠀⠀⠀⢂⠱⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀
-⠀⠀⠀⠀⠀⠀⠀⠀⠀⢢⠑⡌⢢⠀⠤⣉⡜⣰⠁⠀⡣⢝⠀⠀⠀⠀⠀⠀⠀⠀⢀⠳⣹⢌⡱⢢⡱⢌⢲⢰⡀⠀⢎⠺⣤⣙⠳⣀⠀⠀⠀⠀⠠⣙⠦⠁⢨⣑⠂⠀⠀⠀⠀⠀⠀⠀⢌⠳⡀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀
-⠀⠀⠀⠀⠀⠀⠀⠀⠀⢢⡑⠈⠒⡭⠒⠌⠸⣡⠃⠀⣙⠮⡄⠀⠀⠀⠀⠀⠀⠀⠀⠁⠀⠈⠁⠁⠉⣈⠞⡢⠄⠈⢎⡳⠂⠉⠳⢆⡆⣀⠀⠀⠐⡌⠦⠁⠠⣃⠎⠀⠀⠀⠀⠀⠀⠀⠌⢒⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀
-⠀⠀⠀⠀⠀⠀⠀⠀⠀⠒⡄⠁⠀⠀⠁⠀⠰⣡⠂⠀⠈⠸⣑⢋⢆⢳⡘⣔⠣⢆⢠⠱⣊⡕⣎⢖⡱⢎⠞⠁⠀⠈⣎⠱⠀⠀⠀⠈⠲⣡⠢⠄⠀⡜⡡⠂⠐⡥⢊⡴⢡⠎⡤⢁⠆⠀⠘⡀⠎⡐⢂⠰⠀⠆⡀⠀⠀⠀⠀⠀
-⠀⠀⠀⠀⠀⠀⠀⠀⠀⠁⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠈⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠹⢌⡁⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀
-⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠐⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀
-    ]]
-    gpu.setForeground(fore or 0xffffff)
-    local i = 0
-    for line in img:gmatch("([^\n]*)\n?") do
-        gpu.set(x, y + i, line)
-        i = i + 1
-    end
-    gpu.setForeground(0x444444)
-    gpu.set(w - 38, h - 1, "Авторы: ")
-    gpu.setForeground(0x64fff2)
-    gpu.set(w - 30, h - 1, "serafim7, Rijen, VishelPokurit")
-    gpu.setBackground(defBG)
-    gpu.setForeground(defFG)
-end
-
+-- ========== ЗАПУСК ==========
 local function main()
+    -- автоопределение направления экспорта
+    exportDirection = detectExportDirection()
     gpu.fill(1, 1, w, h, " ")
+    drawBigTitle()
     if updInfo() then
         center(h - 15, "Для обмена встаньте на PIM и не сходите до окончания обмена", 0xffffff)
     end
     center(h - 14, "Обновлю доступные руды и связь с МЭ как только наступите", 0x505050)
-    drawDescription(1, h - 13, 0x00a400)
     while true do
         handleEvent(event.pull(1))
     end
