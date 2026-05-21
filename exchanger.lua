@@ -143,7 +143,7 @@ local function giveIngot(toGive, ore, index)
     while totalGive < toGive do
         local giveSize = math.min(toGive - totalGive, ore.maxSize)
         -- Убираем направление "UP" - пусть адаптер сам определяет сторону
-        local success, res = pcall(me.exportItem, { id = ore.give.name, dmg = giveDamage }, giveSize)
+        local success, res = pcall(me.exportItem, { id = ore.give.name, dmg = giveDamage }, "UP", giveSize)
         if success and res and res.size and res.size > 0 then
             totalGive = totalGive + res.size
             ore_list[index].size = ore_list[index].size - res.size
