@@ -121,7 +121,7 @@ local function drawInfo(type)
             gpu.setForeground(0xFFFF00)
             gpu.set(30, print_row, unicode.char(0xFF1E))
             gpu.set(63, print_row, "Доступно:")
-            gpu.setForeground(0x202020)
+            gpu.setForeground(0x00E5C9)
             gpu.set(2, print_row + 1, string.rep("═", w - 2))
         end
         if type == "full" or type == "ingots" then
