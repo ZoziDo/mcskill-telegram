@@ -42,8 +42,8 @@ local ore_list = {
         give = { label = "Железный слиток", name = "minecraft:iron_ingot", amount = 22 }
     },
     {
-        take = { label = "Золотая руда", name = "minecraft:gold_ore", damage = 0.0, amount = 9 },
-        give = { label = "Золотой слиток", name = "minecraft:gold_ingot", damage = 0.0, amount = 22 }
+        take = { label = "Золотая руда", name = "minecraft:gold_ore", amount = 9 },
+        give = { label = "Золотой слиток", name = "minecraft:gold_ingot", amount = 22 }
     },
     {
         take = { label = "Лазуритовая руда", name = "minecraft:lapis_ore", amount = 1 },
@@ -142,12 +142,11 @@ end
 local function updIngotsSize()
     if #ore_list < 1 then return false end
     local totalOre = 0
- 
     for _, ore in ipairs(ore_list) do
+        local giveDamage = ore.give.damage or 0
         local success, item = pcall(function()
-            return me.getItemDetail({ id = ore.give.name, dmg = ore.give.damage }).basic()
+            return me.getItemDetail({ id = ore.give.name, dmg = giveDamage }).basic()
         end)
- 
         if success and item ~= nil then
             ore.size = item.qty
             totalOre = totalOre + item.qty
@@ -157,6 +156,8 @@ local function updIngotsSize()
             ore.maxSize = 1
         end
     end
+    return totalOre > 0
+end
  
     if totalOre == 0 then
         return false
@@ -284,13 +285,12 @@ local function checkInventory()
     local size = pim.getInventorySize()
     local data = pim.getAllStacks(0)
     local forceBreak = false
- 
     for slot = 1, size do
-        if forceBreak then
-            break
-        elseif data[slot] then
+        if forceBreak then break end
+        if data[slot] then
             for index, ore in pairs(ore_list) do
-                if data[slot].id == ore.take.name and data[slot].dmg == ore.take.damage then
+                local needDamage = ore.take.damage or 0
+                if data[slot].id == ore.take.name and data[slot].dmg == needDamage then
                     local check = exchangeOre(slot, ore, index)
                     if not check then
                         forceBreak = true
@@ -300,9 +300,7 @@ local function checkInventory()
             end
         end
     end
- 
     drawInfo("ingots")
- 
     if pim.getInventoryName() ~= "pim" then
         center(h - 15, "Обмен окончен! Приходите ещё!", 0xffffff)
         return checkInventory()
