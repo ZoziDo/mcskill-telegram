@@ -159,13 +159,6 @@ local function updIngotsSize()
     return totalOre > 0
 end
  
-    if totalOre == 0 then
-        return false
-    end
- 
-    return true
-end
- 
 local function drawInfo(type)
     local line = 2
  
