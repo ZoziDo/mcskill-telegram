@@ -32,50 +32,49 @@ local w, h = 80, 50
 local defBG, defFG = gpu.getBackground(), gpu.getForeground()
 gpu.setResolution(w, h)
  
--- Таблица обмена (оставляем как есть, но добавим возможность динамической замены)
 local ore_list = {
     {
-        take = { label = "Алмазная руда", name = "minecraft:diamond_ore", amount = 1 },
-        give = { label = "Алмаз", name = "minecraft:diamond", amount = 2 }
+        take = { label = "Алмазная руда", name = "minecraft:diamond_ore", damage = 0.0, amount = 1 },
+        give = { label = "Алмаз", name = "minecraft:diamond", damage = 0.0, amount = 2 }
     },
     {
-        take = { label = "Железная руда", name = "minecraft:iron_ore", amount = 9 },
-        give = { label = "Железный слиток", name = "minecraft:iron_ingot", amount = 22 }
+        take = { label = "Железная руда", name = "minecraft:iron_ore", damage = 0.0, amount = 9 },
+        give = { label = "Железный слиток", name = "minecraft:iron_ingot", damage = 0.0, amount = 22 }
     },
     {
-        take = { label = "Золотая руда", name = "minecraft:gold_ore", amount = 9 },
-        give = { label = "Золотой слиток", name = "minecraft:gold_ingot", amount = 22 }
+        take = { label = "Золотая руда", name = "minecraft:gold_ore", damage = 0.0, amount = 9 },
+        give = { label = "Золотой слиток", name = "minecraft:gold_ingot", damage = 0.0, amount = 22 }
     },
     {
-        take = { label = "Лазуритовая руда", name = "minecraft:lapis_ore", amount = 1 },
+        take = { label = "Лазуритовая руда", name = "minecraft:lapis_ore", damage = 0.0, amount = 1 },
         give = { label = "Лазурит", name = "minecraft:dye", damage = 4.0, amount = 12 }
     },
     {
-        take = { label = "Красная руда", name = "minecraft:redstone_ore", amount = 1 },
-        give = { label = "Блок красного камня", name = "minecraft:redstone_block", amount = 1 }
+        take = { label = "Красная руда", name = "minecraft:redstone_ore", damage = 0.0, amount = 1 },
+        give = { label = "Блок красного камня", name = "minecraft:redstone_block", damage = 0.0, amount = 1 }
     },
     {
-        take = { label = "Угольная руда", name = "minecraft:coal_ore", amount = 1 },
-        give = { label = "Уголь", name = "minecraft:coal", amount = 3 }
+        take = { label = "Угольная руда", name = "minecraft:coal_ore", damage = 0.0, amount = 1 },
+        give = { label = "Уголь", name = "minecraft:coal", damage = 0.0, amount = 3 }
     },
     {
-        take = { label = "Руда истинного кварца", name = "appliedenergistics2:tile.OreQuartz", amount = 1 },
-        give = { label = "Кристалл ист. кварца", name = "appliedenergistics2:item.ItemMultiMaterial", amount = 3 }
+        take = { label = "Руда истинного кварца", name = "appliedenergistics2:tile.OreQuartz", damage = 0.0, amount = 1 },
+        give = { label = "Кристалл ист. кварца", name = "appliedenergistics2:item.ItemMultiMaterial", damage = 0.0, amount = 3 }
     },
     {
-        take = { label = "Заряж. руда ист. квар", name = "appliedenergistics2:tile.OreQuartzCharged", amount = 1 },
+        take = { label = "Заряж. руда ист. квар", name = "appliedenergistics2:tile.OreQuartzCharged", damage = 0.0, amount = 1 },
         give = { label = "Заряж. крист. кварца", name = "appliedenergistics2:item.ItemMultiMaterial", damage = 1.0, amount = 3 }
     },
     {
-        take = { label = "Кварцевая руда", name = "minecraft:quartz_ore", amount = 1 },
-        give = { label = "Кварц", name = "minecraft:quartz", amount = 4 }
+        take = { label = "Кварцевая руда", name = "minecraft:quartz_ore", damage = 0.0, amount = 1 },
+        give = { label = "Кварц", name = "minecraft:quartz", damage = 0.0, amount = 4 }
     },
     {
-        take = { label = "Медная руда", name = "IC2:blockOreCopper", amount = 9 },
+        take = { label = "Медная руда", name = "IC2:blockOreCopper", damage = 0.0, amount = 9 },
         give = { label = "Медный слиток", name = "IC2:itemIngot", damage = 0.0, amount = 22 }
     },
     {
-        take = { label = "Оловянная руда", name = "IC2:blockOreTin", amount = 9 },
+        take = { label = "Оловянная руда", name = "IC2:blockOreTin", damage = 0.0, amount = 9 },
         give = { label = "Оловянный слиток", name = "IC2:itemIngot", damage = 1.0, amount = 22 }
     },
     {
@@ -91,8 +90,8 @@ local ore_list = {
         give = { label = "Никелевый слиток", name = "ThermalFoundation:material", damage = 68.0, amount = 2 }
     },
     {
-        take = { label = "Дракониевая руда", name = "DraconicEvolution:draconiumOre", amount = 1 },
-        give = { label = "Дракониевая пыль", name = "DraconicEvolution:draconiumDust", amount = 2 }
+        take = { label = "Дракониевая руда", name = "DraconicEvolution:draconiumOre", damage = 0.0, amount = 1 },
+        give = { label = "Дракониевая пыль", name = "DraconicEvolution:draconiumDust", damage = 0.0, amount = 2 }
     }
 }
 local currDir = shell.getWorkingDirectory()
