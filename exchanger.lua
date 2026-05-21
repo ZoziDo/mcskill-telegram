@@ -1,4 +1,4 @@
---v2.4 - DARKON EDITION: auto direction, big title, stats, progress
+--v2.4 - Оптимизированная версия с новым дизайном
 local unicode = require("unicode")
 local computer = require("computer")
 local com = require("component")
@@ -20,23 +20,13 @@ local w, h = 80, 50
 local defBG, defFG = gpu.getBackground(), gpu.getForeground()
 gpu.setResolution(w, h)
 
--- Цвета
-local accent = 0x00E5C9
+-- НАСТРОЙКИ
+local EXPORT_DIR = "UP"          -- направление выдачи слитков (UP, DOWN, NORTH и т.д.)
+local PUSH_DIR = "DOWN"          -- направление выталкивания руды
+local STATS_FILE = "exchanger_stats.txt"   -- файл для статистики
+local accent = 0x00E5C9          -- цвет логотипа
 
--- ========== НАПРАВЛЕНИЕ ВЫДАЧИ (автоопределение) ==========
-local exportDirection = nil
-local function detectExportDirection()
-    local directions = {"UP", "DOWN", "NORTH", "SOUTH", "WEST", "EAST"}
-    for _, dir in ipairs(directions) do
-        local success, res = pcall(me.exportItem, {id="minecraft:stone", dmg=0}, dir, 1)
-        if success and res and res.size and res.size > 0 then
-            return dir
-        end
-    end
-    return "UP"  -- фолбэк
-end
-
--- ========== ТАБЛИЦА ОБМЕНА ==========
+-- Таблица с рудами (damage не указан -> будет 0)
 local ore_list = {
     { take = { label = "Алмазная руда", name = "minecraft:diamond_ore", amount = 1 }, give = { label = "Алмаз", name = "minecraft:diamond", amount = 2 } },
     { take = { label = "Железная руда", name = "minecraft:iron_ore", amount = 9 }, give = { label = "Железный слиток", name = "minecraft:iron_ingot", amount = 22 } },
@@ -72,7 +62,6 @@ local function saveOres(ores)
     io.open(oresPath, "w"):write(inspect(ores)):close()
 end
 
--- ========== ВСПОМОГАТЕЛЬНЫЕ ФУНКЦИИ ==========
 local function center(height, text, color)
     gpu.fill(1, height, w, 1, " ")
     gpu.setForeground(color)
@@ -94,37 +83,6 @@ local function formatNumber(num)
     return formattedNum .. symbols[symbolIndex]
 end
 
--- ========== КРУПНАЯ НАДПИСЬ ==========
-local function drawBigTitle()
-    gpu.setForeground(accent)
-    local darkonLines = {
-        "  ██████╗ ██████╗  █████╗ ██████╗ ██╗  ██╗ ██████╗ ███╗   ██╗",
-        "  ██╔══██╗██╔══██╗██╔══██╗██╔══██╗██║ ██╔╝██╔═══██╗████╗  ██║",
-        "  ██║  ██║██████╔╝███████║██║  ██║█████╔╝ ██║   ██║██╔██╗ ██║",
-        "  ██║  ██║██╔══██╗██╔══██║██║  ██║██╔═██╗ ██║   ██║██║╚██╗██║",
-        "  ██████╔╝██║  ██║██║  ██║██████╔╝██║  ██╗╚██████╔╝██║ ╚████║",
-    }
-    local darkonOffset = 47
-    local darkonX = math.floor((80 - #darkonLines[1]) / 2) + darkonOffset
-    for i, line in ipairs(darkonLines) do
-        gpu.set(darkonX, 4 + i, line)
-    end
-
-    local shopLines = {
-        "  ███████╗ ██╗  ██╗  ██████╗  ██████╗ ",
-        "  ██╔════╝ ██║  ██║ ██╔═══██╗ ██╔══██╗",
-        "  ███████╗ ███████║ ██║   ██║ ██████╔╝",
-        "  ╚════██║ ██╔══██║ ██║   ██║ ██╔═══╝ ",
-        "  ███████║ ██║  ██║ ╚██████╔╝ ██║     "
-    }
-    local shopOffset = 28
-    local shopX = math.floor((80 - #shopLines[1]) / 2) + shopOffset
-    for i, line in ipairs(shopLines) do
-        gpu.set(shopX, 10 + i, line)
-    end
-end
-
--- ========== РАБОТА С МЭ ==========
 local function updIngotsSize()
     if #ore_list < 1 then return false end
     local totalOre = 0
@@ -149,10 +107,9 @@ local function drawInfo(type)
     local line = 2
     if type == "full" then
         gpu.fill(1, 1, w, h - 16, " ")
-        drawBigTitle() -- рисуем шапку после очистки
     end
     for i, ore in pairs(ore_list) do
-        local print_row = line + i + 12 -- сдвиг вниз, чтобы не перекрывать заголовок
+        local print_row = line + i
         if type == "full" then
             gpu.setForeground(0xFF00FF)
             local takeAmount = formatNumber(ore.take.amount)
@@ -172,6 +129,7 @@ local function drawInfo(type)
             gpu.setForeground(0xFF00FF)
             gpu.set(73, print_row, formatNumber(ore.size or 0))
         end
+        line = line + 1
     end
 end
 
@@ -185,25 +143,34 @@ local function updInfo(type)
     return check
 end
 
--- ========== ВЫДАЧА СЛИТКОВ ==========
+-- Статистика обмена
+local stats = { ores = 0, ingots = 0 }
+local function saveStats()
+    local f = io.open(STATS_FILE, "a")
+    if f then
+        f:write(string.format("[%s] Переработано руды: %d, выдано слитков: %d\n", os.date("%Y-%m-%d %H:%M:%S"), stats.ores, stats.ingots))
+        f:close()
+    end
+end
+
 local function giveIngot(toGive, ore, index)
     local totalGive = 0
     local giveDamage = ore.give.damage or 0
     while totalGive < toGive do
         local giveSize = math.min(toGive - totalGive, ore.maxSize)
-        local success, res = pcall(me.exportItem, { id = ore.give.name, dmg = giveDamage }, exportDirection, giveSize)
+        local success, res = pcall(me.exportItem, { id = ore.give.name, dmg = giveDamage }, EXPORT_DIR, giveSize)
         if success and res and res.size and res.size > 0 then
             totalGive = totalGive + res.size
             ore_list[index].size = ore_list[index].size - res.size
+            stats.ingots = stats.ingots + res.size
         else
-            center(h - 15, "Ошибка выдачи слитков! Проверьте место в инвентаре и подключение интерфейса.", 0xff0000)
+            center(h - 15, "Ошибка выдачи слитков! Проверьте место в инвентаре и направление.", 0xff0000)
             center(h - 14, string.format("Ожидаю выдать %d %s", toGive - totalGive, ore.give.label), 0xFFFFFF)
             os.sleep(1)
         end
     end
 end
 
--- ========== ОБМЕН РУДЫ ==========
 local function exchangeOre(slot, ore, index)
     local curSlot = pim.getStackInSlot(slot)
     if not curSlot then
@@ -222,7 +189,7 @@ local function exchangeOre(slot, ore, index)
         return false
     end
 
-    local takedOre = pim.pushItem("DOWN", slot, takeSize)
+    local takedOre = pim.pushItem(PUSH_DIR, slot, takeSize)
     if not takedOre or takedOre == 0 then
         center(h - 14, "Не удалось вытолкнуть руду. Проверьте, что снизу есть ME интерфейс.", 0xff0000)
         os.sleep(2)
@@ -230,14 +197,15 @@ local function exchangeOre(slot, ore, index)
     end
 
     local actualGive = math.floor(takedOre / ore.take.amount) * ore.give.amount
+    stats.ores = stats.ores + takedOre
     center(h - 14, string.format("Меняю %d %s на %d %s", takedOre, ore.take.label, actualGive, ore.give.label), 0xffffff)
     giveIngot(actualGive, ore, index)
     gpu.fill(1, h - 14, w, 1, " ")
     return true
 end
 
--- ========== ОСНОВНАЯ ФУНКЦИЯ ОБМЕНА ==========
 local function checkInventory()
+    -- Небольшая задержка перед началом
     for i = 2, 1, -1 do
         center(h - 14, string.format("Обмен через %d сек...", i), 0x505050)
         os.sleep(1)
@@ -245,15 +213,9 @@ local function checkInventory()
     local size = pim.getInventorySize()
     local data = pim.getAllStacks(0)
     local forceBreak = false
-    local totalSlots = 0
-    for slot = 1, size do if data[slot] then totalSlots = totalSlots + 1 end end
-    local processed = 0
     for slot = 1, size do
         if forceBreak then break end
         if data[slot] then
-            processed = processed + 1
-            local percent = math.floor(processed / totalSlots * 100)
-            center(h - 15, string.format("Прогресс: %d%% (%d/%d слотов)", percent, processed, totalSlots), 0xFFFFFF)
             for index, ore in pairs(ore_list) do
                 local needDamage = ore.take.damage or 0
                 if data[slot].id == ore.take.name and data[slot].dmg == needDamage then
@@ -266,21 +228,35 @@ local function checkInventory()
         end
     end
     drawInfo("ingots")
-    computer.beep(1000, 0.3) -- звук окончания
+    -- Выводим итоговую статистику
+    center(h - 15, string.format("Обмен окончен! Переработано: %d руды → %d слитков", stats.ores, stats.ingots), 0xffffff)
+    saveStats()
     if pim.getInventoryName() ~= "pim" then
-        center(h - 15, "Обмен окончен! Приходите ещё!", 0xffffff)
         return checkInventory()
     else
         event.push("player_off")
     end
 end
 
--- ========== АДМИНИСТРИРОВАНИЕ ==========
 local function isAdmin(user)
     for _, adminUser in pairs(table.pack(computer.users())) do
         if adminUser == user then return true end
     end
     return false
+end
+
+local function drawLogo(x, y, color)
+    local lines = {
+        "  ██████╗ ██████╗  █████╗ ██████╗ ██╗  ██╗ ██████╗ ███╗   ██╗",
+        "  ██╔══██╗██╔══██╗██╔══██╗██╔══██╗██║ ██╔╝██╔═══██╗████╗  ██║",
+        "  ██║  ██║██████╔╝███████║██║  ██║█████╔╝ ██║   ██║██╔██╗ ██║",
+        "  ██║  ██║██╔══██╗██╔══██║██║  ██║██╔═██╗ ██║   ██║██║╚██╗██║",
+        "  ██████╔╝██║  ██║██║  ██║██████╔╝██║  ██╗╚██████╔╝██║ ╚████║",
+    }
+    gpu.setForeground(color)
+    for i, line in ipairs(lines) do
+        gpu.set(x, y + i - 1, line)
+    end
 end
 
 local function handleEvent(eventName, ...)
@@ -294,6 +270,9 @@ local function handleEvent(eventName, ...)
     elseif eventName == "player_on" then
         if not updInfo("ingots") then return end
         center(h - 15, string.format("Приветствую, %s! Начинаю обмен", args[1]), 0xffffff)
+        -- Сбрасываем статистику для новой сессии
+        stats.ores = 0
+        stats.ingots = 0
         checkInventory()
     elseif eventName == "player_off" then
         if not updInfo("ingots") then return end
@@ -341,16 +320,13 @@ local function handleEvent(eventName, ...)
     end
 end
 
--- ========== ЗАПУСК ==========
 local function main()
-    -- автоопределение направления экспорта
-    exportDirection = detectExportDirection()
     gpu.fill(1, 1, w, h, " ")
-    drawBigTitle()
     if updInfo() then
         center(h - 15, "Для обмена встаньте на PIM и не сходите до окончания обмена", 0xffffff)
     end
     center(h - 14, "Обновлю доступные руды и связь с МЭ как только наступите", 0x505050)
+    drawLogo(1, h - 12, accent)   -- рисуем логотип внизу (строки 5)
     while true do
         handleEvent(event.pull(1))
     end
