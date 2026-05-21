@@ -42,8 +42,8 @@ local ore_list = {
         give = { label = "Железный слиток", name = "minecraft:iron_ingot", amount = 22 }
     },
     {
-        take = { label = "Золотая руда", name = "minecraft:gold_ore", amount = 9 },
-        give = { label = "Золотой слиток", name = "minecraft:gold_ingot", amount = 22 }
+        take = { label = "Золотая руда", name = "minecraft:gold_ore", damage = 0.0, amount = 9 },
+        give = { label = "Золотой слиток", name = "minecraft:gold_ingot", damage = 0.0, amount = 22 }
     },
     {
         take = { label = "Лазуритовая руда", name = "minecraft:lapis_ore", amount = 1 },
@@ -219,7 +219,7 @@ local function giveIngot(toGive, ore, index)
     local totalGive = 0
     while totalGive < toGive do
         local giveSize = math.min(toGive - totalGive, ore.maxSize)
-        local success, res = pcall(me.exportItem, { id = ore.give.name, dmg = ore.give.damage }, "UP", giveSize)
+        local success, res = pcall(me.exportItem, { id = ore.give.name, dmg = ore.give.damage }, giveSize)
  
         if success and res.size > 0 then
             totalGive = totalGive + res.size
