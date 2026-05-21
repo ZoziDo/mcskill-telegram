@@ -275,8 +275,8 @@ local function drawCenteredLogo()
         "╚══════╝╚═╝  ╚═╝ ╚═════╝╚═╝  ╚═╝╚═╝  ╚═╝╚═╝  ╚═══╝ ╚═════╝ ╚══════╝╚═╝  ╚═╝"
     }
     local maxWidth = 66
-    local startXDragon = math.floor((w - maxWidth) / 2) - 2   -- смещаем DRAGON влево на 2
-    local startXExchanger = math.floor((w - maxWidth) / 2) - 1 -- смещаем EXCHANGER влево на 1
+    local startXDragon = math.floor((w - maxWidth) / 2) + 2   -- смещаем DRAGON влево на 2
+    local startXExchanger = math.floor((w - maxWidth) / 2) - 2 -- смещаем EXCHANGER влево на 1
     local startY = 1
     gpu.setForeground(accent)
     for i, line in ipairs(dragonLines) do
