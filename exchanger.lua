@@ -42,8 +42,8 @@ local ore_list = {
         give = { label = "Железный слиток", name = "minecraft:iron_ingot", damage = 0.0, amount = 22 }
     },
     {
-        take = { label = "Золотая руда", name = "minecraft:gold_ore", damage = 0.0, amount = 9 },
-        give = { label = "Золотой слиток", name = "minecraft:gold_ingot", damage = 0.0, amount = 22 }
+        take = { label = "Золотая руда", name = "minecraft:gold_ore", amount = 9 },
+        give = { label = "Золотой слиток", name = "minecraft:gold_ingot", amount = 22 }
     },
     {
         take = { label = "Лазуритовая руда", name = "minecraft:lapis_ore", damage = 0.0, amount = 1 },
