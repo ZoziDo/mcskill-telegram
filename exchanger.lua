@@ -1,4 +1,4 @@
---v2.4 - Оптимизированная версия с новым дизайном
+--v2.5 - Глобальная статистика обмена с сохранением
 local unicode = require("unicode")
 local computer = require("computer")
 local com = require("component")
@@ -21,12 +21,13 @@ local defBG, defFG = gpu.getBackground(), gpu.getForeground()
 gpu.setResolution(w, h)
 
 -- НАСТРОЙКИ
-local EXPORT_DIR = "UP"          -- направление выдачи слитков (UP, DOWN, NORTH и т.д.)
-local PUSH_DIR = "DOWN"          -- направление выталкивания руды
-local STATS_FILE = "exchanger_stats.txt"   -- файл для статистики
-local accent = 0x00E5C9          -- цвет логотипа
+local EXPORT_DIR = "UP"
+local PUSH_DIR = "DOWN"
+local STATS_FILE = "exchanger_stats.txt"
+local TOTAL_STATS_FILE = "total_exchanged.txt"   -- файл для глобальной статистики
+local accent = 0x00E5C9
 
--- Таблица с рудами (damage не указан -> будет 0)
+-- Таблица с рудами
 local ore_list = {
     { take = { label = "Алмазная руда", name = "minecraft:diamond_ore", amount = 1 }, give = { label = "Алмаз", name = "minecraft:diamond", amount = 2 } },
     { take = { label = "Железная руда", name = "minecraft:iron_ore", amount = 3 }, give = { label = "Железный слиток", name = "minecraft:iron_ingot", amount = 7 } },
@@ -44,6 +45,30 @@ local ore_list = {
     { take = { label = "Никелевая руда", name = "ThermalFoundation:Ore", damage = 4.0, amount = 1 }, give = { label = "Никелевый слиток", name = "ThermalFoundation:material", damage = 68.0, amount = 2 } },
     { take = { label = "Дракониевая руда", name = "DraconicEvolution:draconiumOre", amount = 1 }, give = { label = "Дракониевая пыль", name = "DraconicEvolution:draconiumDust", amount = 2 } }
 }
+
+-- Глобальная статистика (общее количество переработанной руды за всё время)
+local total_ore_exchanged = 0
+local function loadTotalStats()
+    if fs.exists(TOTAL_STATS_FILE) then
+        local f = io.open(TOTAL_STATS_FILE, "r")
+        local content = f:read("*all")
+        f:close()
+        total_ore_exchanged = tonumber(content) or 0
+    else
+        total_ore_exchanged = 0
+    end
+end
+
+local function saveTotalStats()
+    local f = io.open(TOTAL_STATS_FILE, "w")
+    if f then
+        f:write(tostring(total_ore_exchanged))
+        f:close()
+    end
+end
+
+-- Загружаем сохранённую глобальную статистику
+loadTotalStats()
 
 local currDir = shell.getWorkingDirectory()
 local oresPath = currDir .. "/exchanger_ores.txt"
@@ -103,6 +128,7 @@ local function updIngotsSize()
     return totalOre > 0
 end
 
+-- Отрисовка таблицы + строки общей статистики
 local function drawInfo(type)
     local line = 2
     if type == "full" then
@@ -129,8 +155,13 @@ local function drawInfo(type)
             gpu.setForeground(0xFF00FF)
             gpu.set(73, print_row, formatNumber(ore.size or 0))
         end
-        line = line + 1
     end
+    -- Отрисовка строки общей статистики (после таблицы)
+    local total_line = line + #ore_list + 2
+    gpu.fill(1, total_line, w, 1, " ")
+    gpu.setForeground(0xFFFFFF)
+    local total_text = string.format("Общее переработано руды: %s", formatNumber(total_ore_exchanged))
+    gpu.set(5, total_line, total_text)
 end
 
 local function updInfo(type)
@@ -143,7 +174,7 @@ local function updInfo(type)
     return check
 end
 
--- Статистика обмена
+-- Статистика текущей сессии (сбрасывается каждый раз, когда игрок встаёт на PIM)
 local stats = { ores = 0, ingots = 0 }
 local function saveStats()
     local f = io.open(STATS_FILE, "a")
@@ -198,14 +229,17 @@ local function exchangeOre(slot, ore, index)
 
     local actualGive = math.floor(takedOre / ore.take.amount) * ore.give.amount
     stats.ores = stats.ores + takedOre
+    -- Обновляем глобальную статистику
+    total_ore_exchanged = total_ore_exchanged + takedOre
+    saveTotalStats()  -- сохраняем в файл
     center(h - 14, string.format("Меняю %d %s на %d %s", takedOre, ore.take.label, actualGive, ore.give.label), 0xffffff)
     giveIngot(actualGive, ore, index)
+    drawInfo("ingots")  -- перерисовываем таблицу и общую строку
     gpu.fill(1, h - 14, w, 1, " ")
     return true
 end
 
 local function checkInventory()
-    -- Небольшая задержка перед началом
     for i = 2, 1, -1 do
         center(h - 14, string.format("Обмен через %d сек...", i), 0x505050)
         os.sleep(1)
@@ -228,7 +262,6 @@ local function checkInventory()
         end
     end
     drawInfo("ingots")
-    -- Выводим итоговую статистику
     center(h - 15, string.format("Обмен окончен! Переработано: %d руды → %d слитков", stats.ores, stats.ingots), 0xffffff)
     saveStats()
     if pim.getInventoryName() ~= "pim" then
@@ -246,10 +279,8 @@ local function isAdmin(user)
 end
 
 local function drawLogo(x, y, color)
-    -- === НАСТРОЙКА ПОЛОЖЕНИЯ (меняйте эти числа) ===
-    local dragon_x = 9      -- отступ для DRAGON (по горизонтали)
-    local exchanger_x = 4   -- отступ для EXCHANGER (например, на 1 левее)
-    
+    local dragon_x = 9
+    local exchanger_x = 4
     local dragonLines = {
         "  ██████╗ ██████╗  █████╗ ██████╗ ██╗  ██╗ ██████╗ ███╗   ██╗",
         "  ██╔══██╗██╔══██╗██╔══██╗██╔══██╗██║ ██╔╝██╔═══██╗████╗  ██║",
@@ -266,7 +297,6 @@ local function drawLogo(x, y, color)
         "███████╗██╔╝ ██╗╚██████╗██║  ██║██║  ██║██║ ╚████║╚██████╔╝███████╗██║  ██║",
         "╚══════╝╚═╝  ╚═╝ ╚═════╝╚═╝  ╚═╝╚═╝  ╚═╝╚═╝  ╚═══╝ ╚═════╝ ╚══════╝╚═╝  ╚═╝",
     }
-    
     gpu.setForeground(color)
     for i, line in ipairs(dragonLines) do
         gpu.set(dragon_x, y + i - 1, line)
@@ -287,7 +317,6 @@ local function handleEvent(eventName, ...)
     elseif eventName == "player_on" then
         if not updInfo("ingots") then return end
         center(h - 15, string.format("Приветствую, %s! Начинаю обмен", args[1]), 0xffffff)
-        -- Сбрасываем статистику для новой сессии
         stats.ores = 0
         stats.ingots = 0
         checkInventory()
@@ -343,7 +372,7 @@ local function main()
         center(h - 15, "Для обмена встаньте на PIM и не сходите до окончания обмена", 0xffffff)
     end
     center(h - 14, "Обновлю доступные руды и связь с МЭ как только наступите", 0x505050)
-    drawLogo(8, h - 12, accent)   -- рисуем логотип внизу (строки 5)
+    drawLogo(8, h - 12, accent)
     while true do
         handleEvent(event.pull(1))
     end
