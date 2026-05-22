@@ -1,4 +1,4 @@
---v2.5 - Глобальная статистика обмена
+--v2.5 - Добавлен общий счётчик руды (сохраняется в файл)
 local unicode = require("unicode")
 local computer = require("computer")
 local com = require("component")
@@ -24,10 +24,10 @@ gpu.setResolution(w, h)
 local EXPORT_DIR = "UP"
 local PUSH_DIR = "DOWN"
 local STATS_FILE = "exchanger_stats.txt"
-local TOTAL_STATS_FILE = "total_stats.txt"   -- файл для глобальной статистики
+local TOTAL_FILE = "total_ore.txt"      -- файл для хранения общего количества руды
 local accent = 0x00E5C9
 
--- Таблица с рудами
+-- Таблица с рудами (damage не указан -> будет 0)
 local ore_list = {
     { take = { label = "Алмазная руда", name = "minecraft:diamond_ore", amount = 1 }, give = { label = "Алмаз", name = "minecraft:diamond", amount = 2 } },
     { take = { label = "Железная руда", name = "minecraft:iron_ore", amount = 3 }, give = { label = "Железный слиток", name = "minecraft:iron_ingot", amount = 7 } },
@@ -46,6 +46,25 @@ local ore_list = {
     { take = { label = "Дракониевая руда", name = "DraconicEvolution:draconiumOre", amount = 1 }, give = { label = "Дракониевая пыль", name = "DraconicEvolution:draconiumDust", amount = 2 } }
 }
 
+-- Загрузка / сохранение общего количества руды
+local total_ores_global = 0
+local function loadTotalOres()
+    if fs.exists(TOTAL_FILE) then
+        local f = io.open(TOTAL_FILE, "r")
+        local content = f:read("*all")
+        f:close()
+        total_ores_global = tonumber(content) or 0
+    else
+        total_ores_global = 0
+    end
+end
+local function saveTotalOres()
+    local f = io.open(TOTAL_FILE, "w")
+    f:write(tostring(total_ores_global))
+    f:close()
+end
+loadTotalOres()  -- загружаем при старте
+
 local currDir = shell.getWorkingDirectory()
 local oresPath = currDir .. "/exchanger_ores.txt"
 if fs.exists(oresPath) then
@@ -61,34 +80,6 @@ end
 
 local function saveOres(ores)
     io.open(oresPath, "w"):write(inspect(ores)):close()
-end
-
--- Глобальная статистика (общее количество переработанной руды за всё время)
-local totalOresExchanged = 0
-
-local function loadTotalStats()
-    if fs.exists(TOTAL_STATS_FILE) then
-        local f = io.open(TOTAL_STATS_FILE, "r")
-        local content = f:read("*number")
-        f:close()
-        if content then
-            totalOresExchanged = content
-        end
-    end
-end
-
-local function saveTotalStats()
-    local f = io.open(TOTAL_STATS_FILE, "w")
-    if f then
-        f:write(tostring(totalOresExchanged))
-        f:close()
-    end
-end
-
--- Отображение общей статистики на экране (строка 1)
-local function updateTotalDisplay()
-    local text = "Общее количество переработанной руды: " .. formatNumber(totalOresExchanged)
-    center(1, text, 0xFFFFFF)
 end
 
 local function center(y, text, color)
@@ -132,6 +123,15 @@ local function updIngotsSize()
     return totalOre > 0
 end
 
+-- Рисует строку "Общее: X руды" под таблицей
+local function drawTotalLine()
+    local totalRow = 2 + #ore_list + 2   -- строка под таблицей (2 - начало, + кол-во руд + ещё 1 отступ)
+    gpu.fill(1, totalRow, w, 1, " ")
+    gpu.setForeground(0xFFFFFF)
+    local text = "Общее: " .. formatNumber(total_ores_global) .. " руды"
+    gpu.set(5, totalRow, text)
+end
+
 local function drawInfo(type)
     local line = 2
     if type == "full" then
@@ -160,6 +160,8 @@ local function drawInfo(type)
         end
         line = line + 1
     end
+    -- Если это полная перерисовка или обновление доступного, рисуем строку "Общее"
+    drawTotalLine()
 end
 
 local function updInfo(type)
@@ -169,11 +171,10 @@ local function updInfo(type)
         center(h - 15, "Нет соединения с МЭ или руды не настроены", 0xff0000)
     end
     drawInfo(type)
-    updateTotalDisplay()   -- обновляем строку с глобальной статистикой
     return check
 end
 
--- Статистика текущей сессии
+-- Статистика обмена (за сессию)
 local stats = { ores = 0, ingots = 0 }
 local function saveStats()
     local f = io.open(STATS_FILE, "a")
@@ -193,6 +194,7 @@ local function giveIngot(toGive, ore, index)
             totalGive = totalGive + res.size
             ore_list[index].size = ore_list[index].size - res.size
             stats.ingots = stats.ingots + res.size
+            drawInfo("ingots")   -- обновляем доступное количество и строку "Общее"
         else
             center(h - 15, "Ошибка выдачи слитков! Проверьте место в инвентаре и направление.", 0xff0000)
             center(h - 14, string.format("Ожидаю выдать %d %s", toGive - totalGive, ore.give.label), 0xFFFFFF)
@@ -228,10 +230,11 @@ local function exchangeOre(slot, ore, index)
 
     local actualGive = math.floor(takedOre / ore.take.amount) * ore.give.amount
     stats.ores = stats.ores + takedOre
-    -- Обновляем глобальную статистику
-    totalOresExchanged = totalOresExchanged + takedOre
-    saveTotalStats()
-    updateTotalDisplay()
+    -- Обновляем глобальный счётчик и сохраняем
+    total_ores_global = total_ores_global + takedOre
+    saveTotalOres()
+    -- Обновляем строку "Общее" на экране
+    drawTotalLine()
     
     center(h - 14, string.format("Меняю %d %s на %d %s", takedOre, ore.take.label, actualGive, ore.give.label), 0xffffff)
     giveIngot(actualGive, ore, index)
@@ -262,7 +265,6 @@ local function checkInventory()
         end
     end
     drawInfo("ingots")
-    updateTotalDisplay()
     center(h - 15, string.format("Обмен окончен! Переработано: %d руды → %d слитков", stats.ores, stats.ingots), 0xffffff)
     saveStats()
     if pim.getInventoryName() ~= "pim" then
@@ -369,7 +371,6 @@ end
 
 local function main()
     gpu.fill(1, 1, w, h, " ")
-    loadTotalStats()          -- загружаем глобальную статистику
     if updInfo() then
         center(h - 15, "Для обмена встаньте на PIM и не сходите до окончания обмена", 0xffffff)
     end
