@@ -26,6 +26,7 @@ local PUSH_DIR = "DOWN"
 local STATS_FILE = "exchanger_stats.txt"
 local TOTAL_FILE = "total_ore.txt"      -- файл для хранения общего количества руды
 local accent = 0x00E5C9
+local TOTAL_OFFSET = 7
 
 -- Таблица с рудами (damage не указан -> будет 0)
 local ore_list = {
@@ -125,11 +126,13 @@ end
 
 -- Рисует строку "Общее: X руды" под таблицей
 local function drawTotalLine()
-    local totalRow = 2 + #ore_list + 2   -- строка под таблицей (2 - начало, + кол-во руд + ещё 1 отступ)
-    gpu.fill(1, totalRow, w, 1, " ")
-    gpu.setForeground(0xFFFFFF)
-    local text = "Общее: " .. formatNumber(total_ores_global) .. " руды"
-    gpu.set(5, totalRow, text)
+    local totalRow = 2 + #ore_list + 2 + TOTAL_OFFSET   -- строка под таблицей с доп. отступом
+    if totalRow < h then
+        gpu.fill(1, totalRow, w, 1, " ")
+        gpu.setForeground(0xFFFFFF)
+        local text = "Общее: " .. formatNumber(total_ores_global) .. " руды"
+        gpu.set(5, totalRow, text)
+    end
 end
 
 local function drawInfo(type)
