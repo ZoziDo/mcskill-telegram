@@ -65,8 +65,14 @@ local MAIN_CHEST_DIRECTION = "SOUTH"
 local FIRST_CHEST_SIDE = 3  -- FRONT: сундук возле ME Interface ячейки
 local SECOND_CHEST_SIDE = 2 -- BACK: сундук возле основного ME Interface
 
--- За один проход передаём небольшие партии. Так сундуки не переполняются.
-local MAX_BATCH_ITEMS = 768
+-- За один проход передаём безопасную партию. Второй сундук временно
+-- хранит и руду, и награду, поэтому значение выше 800 ставить нельзя.
+local MAX_BATCH_ITEMS = 800
+
+-- Проверенные методы exportItem/pullItem работают синхронно и сами
+-- возвращают фактически перемещённое количество. Искусственные задержки
+-- почти полностью убраны. Короткая пауза используется только при ошибке.
+local RETRY_DELAY = 0.02
 
 local STATS_FILE = "exchanger_stats.txt"
 local TOTAL_FILE = "total_ore.txt"
@@ -447,7 +453,6 @@ local function exportToChest(address, direction, networkItem, name, damage, amou
 
     while total < amount do
         local request = math.min(amount - total, MAX_BATCH_ITEMS)
-        local before = countChestItem(chestSide, name, damage)
 
         local ok, result, extra = pcall(
             com.invoke,
@@ -462,14 +467,12 @@ local function exportToChest(address, direction, networkItem, name, damage, amou
             return false, total, "exportItem: " .. tostring(result)
         end
 
-        os.sleep(0.15)
-
-        local after = countChestItem(chestSide, name, damage)
-        local actual = math.max(0, after - before)
-        local reported = returnedAmount(result, extra)
-        local moved = actual > 0 and actual or reported
+        -- На этой сборке exportItem синхронно возвращает {size=...}.
+        -- Поэтому не сканируем все 27 слотов сундука до и после каждого вызова.
+        local moved = returnedAmount(result, extra)
 
         if moved <= 0 then
+            os.sleep(RETRY_DELAY)
             return false, total, string.format(
                 "ME Interface не выдал %s (%s:%d).",
                 tostring(name),
@@ -487,79 +490,107 @@ end
 
 local function transferBetweenChests(fromSide, toSide, name, damage, amount)
     local total = 0
+    local size = getChestSize(fromSide)
 
-    while total < amount do
-        local slot, available = findChestSlot(fromSide, name, damage)
-        if not slot then
-            return false, total, "Предмет исчез из исходного сундука."
-        end
-
-        local request = math.min(amount - total, available)
-        local ok, moved = pcall(
-            bridge.transferItem,
-            fromSide,
-            toSide,
-            request,
-            slot
-        )
-
-        moved = ok and math.floor(tonumber(moved) or 0) or 0
-        if moved <= 0 then
-            return false, total, "Transposer не смог перенести предмет между сундуками."
-        end
-
-        total = total + moved
-        os.sleep(0.05)
+    if not size then
+        return false, total, "Исходный сундук не найден."
     end
 
-    return true, total
+    -- Идём по слотам один раз, вместо повторного сканирования сундука
+    -- с первого слота после переноса каждого стака.
+    for slot = 1, size do
+        while total < amount do
+            local okStack, stack = pcall(bridge.getStackInSlot, fromSide, slot)
+            if not okStack or not stack
+                or stackName(stack) ~= name
+                or stackDamage(stack) ~= (tonumber(damage) or 0) then
+                break
+            end
+
+            local available = stackAmount(stack)
+            if available <= 0 then break end
+
+            local request = math.min(amount - total, available)
+            local ok, moved = pcall(
+                bridge.transferItem,
+                fromSide,
+                toSide,
+                request,
+                slot
+            )
+
+            moved = ok and math.floor(tonumber(moved) or 0) or 0
+            if moved <= 0 then
+                return false, total, "Transposer не смог перенести предмет между сундуками."
+            end
+
+            total = total + moved
+        end
+
+        if total >= amount then
+            return true, total
+        end
+    end
+
+    return false, total, "Предмет исчез из исходного сундука."
 end
 
 local function pullFromChest(address, direction, chestSide, name, damage, amount)
     local total = 0
+    local size = getChestSize(chestSide)
 
-    while total < amount do
-        local slot, available = findChestSlot(chestSide, name, damage)
-        if not slot then
-            return false, total, "Предмет не найден в сундуке назначения."
-        end
-
-        local request = math.min(amount - total, available)
-        local before = countChestItem(chestSide, name, damage)
-
-        local ok, result, extra = pcall(
-            com.invoke,
-            address,
-            "pullItem",
-            direction,
-            slot,
-            request
-        )
-
-        if not ok then
-            return false, total, "pullItem: " .. tostring(result)
-        end
-
-        os.sleep(0.15)
-
-        local after = countChestItem(chestSide, name, damage)
-        local actual = math.max(0, before - after)
-        local reported = returnedAmount(result, extra)
-        local moved = actual > 0 and actual or reported
-
-        if moved <= 0 then
-            return false, total, string.format(
-                "ME Interface не забрал %s из сундука (%s).",
-                tostring(name),
-                tostring(direction)
-            )
-        end
-
-        moved = math.min(moved, amount - total)
-        total = total + moved
+    if not size then
+        return false, total, "Сундук назначения не найден."
     end
 
-    return true, total
+    -- pullItem работает со слотом, поэтому последовательно обрабатываем
+    -- каждый слот только один раз и доверяем возвращённому количеству.
+    for slot = 1, size do
+        while total < amount do
+            local okStack, stack = pcall(bridge.getStackInSlot, chestSide, slot)
+            if not okStack or not stack
+                or stackName(stack) ~= name
+                or stackDamage(stack) ~= (tonumber(damage) or 0) then
+                break
+            end
+
+            local available = stackAmount(stack)
+            if available <= 0 then break end
+
+            local request = math.min(amount - total, available)
+            local ok, result, extra = pcall(
+                com.invoke,
+                address,
+                "pullItem",
+                direction,
+                slot,
+                request
+            )
+
+            if not ok then
+                return false, total, "pullItem: " .. tostring(result)
+            end
+
+            local moved = returnedAmount(result, extra)
+            if moved <= 0 then
+                os.sleep(RETRY_DELAY)
+                return false, total, string.format(
+                    "ME Interface не забрал %s из сундука (%s).",
+                    tostring(name),
+                    tostring(direction)
+                )
+            end
+
+            moved = math.min(moved, amount - total)
+            total = total + moved
+        end
+
+        if total >= amount then
+            return true, total
+        end
+    end
+
+    return false, total, "Предмет не найден в сундуке назначения."
 end
 
 -- ============================================================
@@ -1318,7 +1349,7 @@ end
 
 local function processCellExchange()
     setStatus("Считываю содержимое ячейки...", C.cyan, C.cyan)
-    os.sleep(0.3)
+    os.sleep(0.05)
 
     local chestsOk, chestError = serviceChestsEmpty()
     if not chestsOk then
@@ -1387,9 +1418,12 @@ local function processCellExchange()
             stats.ores = stats.ores + accepted
             stats.ingots = stats.ingots + rewarded
             total_ores_global = total_ores_global + accepted
-            saveTotalOres()
-            drawTotalLine()
         end
+
+        -- Записываем статистику и обновляем экран один раз на вид руды,
+        -- а не после каждой внутренней партии.
+        saveTotalOres()
+        drawTotalLine()
     end
 
     updInfo("ingots")
