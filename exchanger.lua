@@ -1,395 +1,869 @@
---v2.5 - Добавлен общий счётчик руды (сохраняется в файл)
-local unicode = require("unicode")
+local component = require("component")
 local computer = require("computer")
-local com = require("component")
-local event = require("event")
-local fs = require("filesystem")
-local shell = require("shell")
-local inspect = {}
 
-if not fs.exists("/lib/inspect.lua") then
-    shell.execute("wget -q https://raw.githubusercontent.com/kikito/inspect.lua/master/inspect.lua /lib/inspect.lua")
+local sidesOk, sides = pcall(require, "sides")
+if not sidesOk or type(sides) ~= "table" then
+  sides = {
+    bottom = 0,
+    top = 1,
+    back = 2,
+    front = 3,
+    right = 4,
+    left = 5,
+    down = 0,
+    up = 1,
+  }
 end
-inspect = require("inspect")
 
-local me = com.isAvailable("me_interface") and com.me_interface or error("Интерфейс не подключен")
-local pim = com.isAvailable("pim") and com.pim or error("PIM не подключен")
-local gpu = com.gpu
+local REPORT_PATH = "/home/me_dual_system_report.txt"
+local SAMPLE_ITEMS = 12
+local SAMPLE_CRAFTABLES = 8
 
-local w, h = 80, 50
-local defBG, defFG = gpu.getBackground(), gpu.getForeground()
-gpu.setResolution(w, h)
+local output = {}
 
--- НАСТРОЙКИ
-local EXPORT_DIR = "UP"
-local PUSH_DIR = "DOWN"
-local STATS_FILE = "exchanger_stats.txt"
-local TOTAL_FILE = "total_ore.txt"      -- файл для хранения общего количества руды
-local accent = 0x00E5C9
-local TOTAL_OFFSET = 7
+local function writeLine(value)
+  value = tostring(value or "")
+  output[#output + 1] = value
+  print(value)
+end
 
--- Таблица с рудами (damage не указан -> будет 0)
-local ore_list = {
-    { take = { label = "Алмазная руда", name = "minecraft:diamond_ore", amount = 1 }, give = { label = "Алмаз", name = "minecraft:diamond", amount = 2 } },
-    { take = { label = "Железная руда", name = "minecraft:iron_ore", amount = 3 }, give = { label = "Железный слиток", name = "minecraft:iron_ingot", amount = 7 } },
-    { take = { label = "Золотая руда", name = "minecraft:gold_ore", amount = 3 }, give = { label = "Золотой слиток", name = "minecraft:gold_ingot", amount = 7 } },
-    { take = { label = "Лазуритовая руда", name = "minecraft:lapis_ore", amount = 1 }, give = { label = "Лазурит", name = "minecraft:dye", damage = 4.0, amount = 7 } },
-    { take = { label = "Красная руда", name = "minecraft:redstone_ore", amount = 1 }, give = { label = "Блок красного камня", name = "minecraft:redstone_block", amount = 1 } },
-    { take = { label = "Угольная руда", name = "minecraft:coal_ore", amount = 1 }, give = { label = "Уголь", name = "minecraft:coal", amount = 3 } },
-    { take = { label = "Руда истинного кварца", name = "appliedenergistics2:tile.OreQuartz", amount = 1 }, give = { label = "Кристалл ист. кварца", name = "appliedenergistics2:item.ItemMultiMaterial", amount = 3 } },
-    { take = { label = "Заряж. руда ист. квар", name = "appliedenergistics2:tile.OreQuartzCharged", amount = 1 }, give = { label = "Заряж. крист. кварца", name = "appliedenergistics2:item.ItemMultiMaterial", damage = 1.0, amount = 3 } },
-    { take = { label = "Кварцевая руда", name = "minecraft:quartz_ore", amount = 1 }, give = { label = "Кварц", name = "minecraft:quartz", amount = 4 } },
-    { take = { label = "Медная руда", name = "IC2:blockOreCopper", amount = 3 }, give = { label = "Медный слиток", name = "IC2:itemIngot", amount = 7 } },
-    { take = { label = "Оловянная руда", name = "IC2:blockOreTin", amount = 3 }, give = { label = "Оловянный слиток", name = "IC2:itemIngot", damage = 1.0, amount = 7 } },
-    { take = { label = "Серебряная руда", name = "ThermalFoundation:Ore", damage = 2.0, amount = 1 }, give = { label = "Серебрянный слиток", name = "IC2:itemIngot", damage = 6.0, amount = 2 } },
-    { take = { label = "Платиновая руда", name = "ThermalFoundation:Ore", damage = 5.0, amount = 1 }, give = { label = "Измельчённая платина", name = "ThermalFoundation:material", damage = 37.0, amount = 2 } },
-    { take = { label = "Никелевая руда", name = "ThermalFoundation:Ore", damage = 4.0, amount = 1 }, give = { label = "Никелевый слиток", name = "ThermalFoundation:material", damage = 68.0, amount = 2 } },
-    { take = { label = "Дракониевая руда", name = "DraconicEvolution:draconiumOre", amount = 1 }, give = { label = "Дракониевая пыль", name = "DraconicEvolution:draconiumDust", amount = 2 } }
+local function saveReport()
+  local file, err = io.open(REPORT_PATH, "w")
+  if not file then
+    print("Не удалось сохранить отчёт: " .. tostring(err))
+    return false
+  end
+
+  file:write(table.concat(output, "\n"))
+  file:write("\n")
+  file:close()
+  return true
+end
+
+local function separator(title)
+  writeLine("")
+  writeLine("============================================================")
+  writeLine(title)
+  writeLine("============================================================")
+end
+
+local function shortAddress(address)
+  address = tostring(address or "")
+  if #address <= 12 then return address end
+  return address:sub(1, 8) .. "..." .. address:sub(-4)
+end
+
+local function countTable(tbl)
+  if type(tbl) ~= "table" then return 0 end
+  local count = 0
+  for _ in pairs(tbl) do
+    count = count + 1
+  end
+  return count
+end
+
+local function sortedKeys(tbl)
+  local result = {}
+  if type(tbl) ~= "table" then return result end
+
+  for key in pairs(tbl) do
+    result[#result + 1] = tostring(key)
+  end
+
+  table.sort(result)
+  return result
+end
+
+local function safeType(address)
+  local ok, value = pcall(component.type, address)
+  if ok then return tostring(value or "unknown") end
+  return "unknown"
+end
+
+local function safeMethods(address)
+  local ok, value = pcall(component.methods, address)
+  if ok and type(value) == "table" then
+    return value
+  end
+  return {}
+end
+
+local function hasMethod(methods, name)
+  return type(methods) == "table" and methods[name] ~= nil
+end
+
+local function invoke(address, methodName, ...)
+  local ok, a, b, c, d = pcall(
+    component.invoke,
+    address,
+    methodName,
+    ...
+  )
+
+  if not ok then
+    return false, tostring(a)
+  end
+
+  return true, a, b, c, d
+end
+
+local function getDoc(address, methodName)
+  local ok, value = pcall(component.doc, address, methodName)
+  if ok and value then return tostring(value) end
+  return nil
+end
+
+local function normalizeItem(item)
+  if type(item) ~= "table" then
+    return nil
+  end
+
+  local fingerprint =
+    type(item.fingerprint) == "table"
+    and item.fingerprint
+    or item
+
+  local id =
+    fingerprint.id
+    or fingerprint.name
+    or item.id
+    or item.name
+    or item.internalName
+
+  local damage = tonumber(
+    fingerprint.dmg
+    or fingerprint.damage
+    or item.dmg
+    or item.damage
+  ) or 0
+
+  local amount = tonumber(
+    item.size
+    or item.qty
+    or item.count
+    or item.amount
+    or fingerprint.size
+    or fingerprint.qty
+    or fingerprint.count
+  ) or 0
+
+  local displayName =
+    item.label
+    or item.displayName
+    or fingerprint.label
+    or fingerprint.displayName
+
+  return {
+    id = id and tostring(id) or nil,
+    damage = damage,
+    amount = amount,
+    label = displayName and tostring(displayName) or nil,
+    craftable =
+      item.isCraftable == true
+      or fingerprint.isCraftable == true,
+  }
+end
+
+local function summarizeNetworkItems(items)
+  if type(items) ~= "table" then
+    return {
+      entries = 0,
+      nonZeroEntries = 0,
+      totalAmount = 0,
+      samples = {},
+    }
+  end
+
+  local summary = {
+    entries = 0,
+    nonZeroEntries = 0,
+    totalAmount = 0,
+    samples = {},
+  }
+
+  for _, rawItem in pairs(items) do
+    summary.entries = summary.entries + 1
+
+    local item = normalizeItem(rawItem)
+    if item then
+      if item.amount > 0 then
+        summary.nonZeroEntries =
+          summary.nonZeroEntries + 1
+      end
+
+      summary.totalAmount =
+        summary.totalAmount + item.amount
+
+      if #summary.samples < SAMPLE_ITEMS then
+        summary.samples[#summary.samples + 1] = item
+      end
+    end
+  end
+
+  return summary
+end
+
+local function printNetworkSummary(methodName, ok, result)
+  writeLine("")
+  writeLine("Проверка " .. methodName .. ":")
+
+  if not ok then
+    writeLine("  ОШИБКА: " .. tostring(result))
+    return nil
+  end
+
+  if type(result) ~= "table" then
+    writeLine(
+      "  Метод вернул не таблицу: "
+      .. tostring(result)
+      .. " ["
+      .. type(result)
+      .. "]"
+    )
+    return nil
+  end
+
+  local summary = summarizeNetworkItems(result)
+
+  writeLine(
+    "  Записей в ответе: "
+    .. tostring(summary.entries)
+  )
+  writeLine(
+    "  Записей с количеством > 0: "
+    .. tostring(summary.nonZeroEntries)
+  )
+  writeLine(
+    "  Суммарное количество предметов: "
+    .. tostring(summary.totalAmount)
+  )
+
+  if #summary.samples == 0 then
+    writeLine("  Примеры предметов: нет")
+  else
+    writeLine("  Первые предметы:")
+
+    for index, item in ipairs(summary.samples) do
+      writeLine(string.format(
+        "    %02d. %s:%d | qty=%s | %s%s",
+        index,
+        tostring(item.id or "<нет id>"),
+        tonumber(item.damage) or 0,
+        tostring(item.amount or 0),
+        tostring(item.label or "без названия"),
+        item.craftable and " | craftable" or ""
+      ))
+    end
+  end
+
+  return summary
+end
+
+local function callCraftableGetItemStack(craftable)
+  if type(craftable) ~= "table"
+    or type(craftable.getItemStack) ~= "function"
+  then
+    return false, "getItemStack отсутствует"
+  end
+
+  local ok, result = pcall(craftable.getItemStack)
+  if ok then return true, result end
+
+  ok, result = pcall(
+    craftable.getItemStack,
+    craftable
+  )
+  if ok then return true, result end
+
+  return false, tostring(result)
+end
+
+local function inspectCraftables(address, methods)
+  if not hasMethod(methods, "getCraftables") then
+    writeLine("")
+    writeLine("Проверка getCraftables:")
+    writeLine("  Метод отсутствует")
+    return 0
+  end
+
+  local ok, craftables = invoke(
+    address,
+    "getCraftables"
+  )
+
+  writeLine("")
+  writeLine("Проверка getCraftables:")
+
+  if not ok then
+    writeLine("  ОШИБКА: " .. tostring(craftables))
+    return 0
+  end
+
+  if type(craftables) ~= "table" then
+    writeLine(
+      "  Вернулся тип "
+      .. type(craftables)
+      .. ": "
+      .. tostring(craftables)
+    )
+    return 0
+  end
+
+  local total = countTable(craftables)
+  writeLine("  Найдено шаблонов: " .. tostring(total))
+
+  local shown = 0
+  for _, craftable in pairs(craftables) do
+    if shown >= SAMPLE_CRAFTABLES then break end
+    shown = shown + 1
+
+    local stackOk, stack =
+      callCraftableGetItemStack(craftable)
+
+    if stackOk and type(stack) == "table" then
+      local item = normalizeItem(stack)
+      if item then
+        writeLine(string.format(
+          "    %02d. %s:%d | %s",
+          shown,
+          tostring(item.id or "<нет id>"),
+          tonumber(item.damage) or 0,
+          tostring(item.label or "без названия")
+        ))
+      else
+        writeLine(
+          "    "
+          .. tostring(shown)
+          .. ". getItemStack вернул таблицу без id"
+        )
+      end
+    else
+      writeLine(
+        "    "
+        .. tostring(shown)
+        .. ". "
+        .. tostring(stack)
+      )
+    end
+  end
+
+  return total
+end
+
+local sideOrder = {
+  {"bottom/down", 0},
+  {"top/up", 1},
+  {"back", 2},
+  {"front", 3},
+  {"right", 4},
+  {"left", 5},
 }
 
--- Загрузка / сохранение общего количества руды
-local total_ores_global = 0
-local function loadTotalOres()
-    if fs.exists(TOTAL_FILE) then
-        local f = io.open(TOTAL_FILE, "r")
-        local content = f:read("*all")
-        f:close()
-        total_ores_global = tonumber(content) or 0
-    else
-        total_ores_global = 0
+local function callSideMethod(
+  address,
+  methods,
+  methodName,
+  sideNumber,
+  sideLabel
+)
+  if not hasMethod(methods, methodName) then
+    return nil
+  end
+
+  local attempts = {
+    sideNumber,
+    sideLabel,
+  }
+
+  if sideNumber == 0 then
+    attempts[#attempts + 1] = "down"
+    attempts[#attempts + 1] = "bottom"
+  elseif sideNumber == 1 then
+    attempts[#attempts + 1] = "up"
+    attempts[#attempts + 1] = "top"
+  end
+
+  for _, argument in ipairs(attempts) do
+    local ok, value = invoke(
+      address,
+      methodName,
+      argument
+    )
+
+    if ok and value ~= nil then
+      return tostring(value), tostring(argument)
     end
-end
-local function saveTotalOres()
-    local f = io.open(TOTAL_FILE, "w")
-    f:write(tostring(total_ores_global))
-    f:close()
-end
-loadTotalOres()  -- загружаем при старте
+  end
 
-local currDir = shell.getWorkingDirectory()
-local oresPath = currDir .. "/exchanger_ores.txt"
-if fs.exists(oresPath) then
-    local file = io.open(oresPath, "r")
-    ore_list = file:read("*all")
-    file:close()
-    local success, ore_table = pcall(load("return " .. ore_list))
-    if not success then
-        return error("Ошибка в таблице " .. oresPath)
-    end
-    ore_list = ore_table
-end
-
-local function saveOres(ores)
-    io.open(oresPath, "w"):write(inspect(ores)):close()
-end
-
-local function center(y, text, color)
-    gpu.fill(1, y, w, 1, " ")
-    gpu.setForeground(color)
-    gpu.set(math.floor(w / 2 - unicode.len(text) / 2), y, text)
+  return nil
 end
 
-local function formatNumber(num)
-    local symbols = { "", "K", "M", "B", "T" }
-    local formattedNum = num
-    local symbolIndex = 1
-    while formattedNum >= 1000 do
-        formattedNum = formattedNum / 1000
-        symbolIndex = symbolIndex + 1
-    end
-    formattedNum = string.format("%.1f", formattedNum)
-    if formattedNum:sub(-2) == ".0" then
-        formattedNum = formattedNum:sub(1, -3)
-    end
-    return formattedNum .. symbols[symbolIndex]
+local function inspectSides(address, methods)
+  separator("ПОДКЛЮЧЁННЫЕ СТОРОНЫ")
+
+  writeLine(
+    "Стандартная нумерация OpenComputers:"
+  )
+
+  for _, side in ipairs(sideOrder) do
+    writeLine(
+      "  "
+      .. tostring(side[2])
+      .. " = "
+      .. tostring(side[1])
+    )
+  end
+
+  local supportsInventory =
+    hasMethod(methods, "getInventoryName")
+    or hasMethod(methods, "getInventorySize")
+
+  if not supportsInventory then
+    writeLine("")
+    writeLine(
+      "У компонента нет getInventoryName/getInventorySize."
+    )
+    writeLine(
+      "Определить подключённую сторону пассивно невозможно."
+    )
+    writeLine(
+      "Смотрите документацию exportItem/importItem ниже."
+    )
+    return
+  end
+
+  writeLine("")
+  writeLine("Проверка соседних инвентарей:")
+
+  for _, side in ipairs(sideOrder) do
+    local label = side[1]
+    local number = side[2]
+
+    local inventoryName, nameArg = callSideMethod(
+      address,
+      methods,
+      "getInventoryName",
+      number,
+      label
+    )
+
+    local inventorySize, sizeArg = callSideMethod(
+      address,
+      methods,
+      "getInventorySize",
+      number,
+      label
+    )
+
+    writeLine(string.format(
+      "  side %d (%s): name=%s; size=%s; args=%s/%s",
+      number,
+      label,
+      tostring(inventoryName or "-"),
+      tostring(inventorySize or "-"),
+      tostring(nameArg or "-"),
+      tostring(sizeArg or "-")
+    ))
+  end
 end
 
-local function updIngotsSize()
-    if #ore_list < 1 then return false end
-    local totalOre = 0
-    for _, ore in ipairs(ore_list) do
-        local giveDamage = ore.give.damage or 0
-        local success, item = pcall(function()
-            return me.getItemDetail({ id = ore.give.name, dmg = giveDamage }).basic()
-        end)
-        if success and item then
-            ore.size = item.qty
-            totalOre = totalOre + item.qty
-            ore.maxSize = item.max_size or 64
-        else
-            ore.size = 0
-            ore.maxSize = 64
-        end
+local importantDocs = {
+  "getItemsInNetwork",
+  "getAvailableItems",
+  "getCraftables",
+  "getItemDetail",
+  "exportItem",
+  "importItem",
+  "getInventoryName",
+  "getInventorySize",
+  "listSources",
+}
+
+local function inspectInterface(
+  number,
+  address,
+  primaryAddress
+)
+  local componentType = safeType(address)
+  local methods = safeMethods(address)
+
+  separator(
+    "МЭ-СИСТЕМА #"
+    .. tostring(number)
+    .. " | "
+    .. componentType
+    .. " | "
+    .. address
+  )
+
+  writeLine(
+    "Короткий адрес: "
+    .. shortAddress(address)
+  )
+  writeLine(
+    "Выбрана через component.me_interface: "
+    .. (
+      address == primaryAddress
+      and "ДА — именно её сейчас берёт магазин"
+      or "НЕТ"
+    )
+  )
+
+  local methodNames = sortedKeys(methods)
+
+  writeLine(
+    "Количество методов: "
+    .. tostring(#methodNames)
+  )
+
+  if #methodNames > 0 then
+    writeLine("Методы:")
+    local currentLine = "  "
+
+    for _, methodName in ipairs(methodNames) do
+      local addition = methodName .. ", "
+
+      if #currentLine + #addition > 100 then
+        writeLine(currentLine)
+        currentLine = "  " .. addition
+      else
+        currentLine = currentLine .. addition
+      end
     end
-    return totalOre > 0
+
+    if currentLine ~= "  " then
+      writeLine(currentLine)
+    end
+  end
+
+  writeLine("")
+  writeLine("Документация важных методов:")
+
+  for _, methodName in ipairs(importantDocs) do
+    if hasMethod(methods, methodName) then
+      writeLine(
+        "  "
+        .. methodName
+        .. ": "
+        .. tostring(
+          getDoc(address, methodName)
+          or "<документация отсутствует>"
+        )
+      )
+    end
+  end
+
+  local bestSummary = nil
+  local bestMethod = nil
+
+  if hasMethod(methods, "getItemsInNetwork") then
+    local ok, result = invoke(
+      address,
+      "getItemsInNetwork"
+    )
+
+    local summary = printNetworkSummary(
+      "getItemsInNetwork()",
+      ok,
+      result
+    )
+
+    if summary then
+      bestSummary = summary
+      bestMethod = "getItemsInNetwork"
+    end
+  else
+    writeLine("")
+    writeLine("Проверка getItemsInNetwork:")
+    writeLine("  Метод отсутствует")
+  end
+
+  if hasMethod(methods, "getAvailableItems") then
+    local ok, result = invoke(
+      address,
+      "getAvailableItems",
+      "NONE"
+    )
+
+    if not ok then
+      ok, result = invoke(
+        address,
+        "getAvailableItems"
+      )
+    end
+
+    local summary = printNetworkSummary(
+      "getAvailableItems(\"NONE\") / без аргументов",
+      ok,
+      result
+    )
+
+    if summary
+      and (
+        not bestSummary
+        or summary.nonZeroEntries
+          > bestSummary.nonZeroEntries
+      )
+    then
+      bestSummary = summary
+      bestMethod = "getAvailableItems"
+    end
+  else
+    writeLine("")
+    writeLine("Проверка getAvailableItems:")
+    writeLine("  Метод отсутствует")
+  end
+
+  local craftableCount =
+    inspectCraftables(address, methods)
+
+  inspectSides(address, methods)
+
+  separator("ИТОГ ПО МЭ-СИСТЕМЕ #" .. tostring(number))
+
+  writeLine(
+    "Рабочий метод чтения предметов: "
+    .. tostring(bestMethod or "НЕ НАЙДЕН")
+  )
+
+  if bestSummary then
+    writeLine(
+      "Видимых ненулевых позиций: "
+      .. tostring(bestSummary.nonZeroEntries)
+    )
+    writeLine(
+      "Суммарное количество: "
+      .. tostring(bestSummary.totalAmount)
+    )
+  else
+    writeLine("Предметы прочитать не удалось")
+  end
+
+  writeLine(
+    "Количество шаблонов: "
+    .. tostring(craftableCount)
+  )
+
+  return {
+    address = address,
+    componentType = componentType,
+    primary = address == primaryAddress,
+    method = bestMethod,
+    nonZeroEntries =
+      bestSummary and bestSummary.nonZeroEntries or 0,
+    totalAmount =
+      bestSummary and bestSummary.totalAmount or 0,
+    craftables = craftableCount,
+  }
 end
 
--- Рисует строку "Общее: X руды" под таблицей
-local function drawTotalLine()
-    local totalRow = 2 + #ore_list + 2 + TOTAL_OFFSET   -- строка под таблицей с доп. отступом
-    if totalRow < h then
-        gpu.fill(1, totalRow, w, 1, " ")
-        gpu.setForeground(0xFFFFFF)
-        local text = "Общее: " .. formatNumber(total_ores_global) .. " руды"
-        gpu.set(5, totalRow, text)
+local function collectMEComponents()
+  local found = {}
+  local addresses = {}
+
+  local acceptedTypes = {
+    me_interface = true,
+    me_bridge = true,
+    me_controller = true,
+  }
+
+  for address, componentType in component.list() do
+    componentType = tostring(componentType or "")
+
+    if acceptedTypes[componentType]
+      or componentType:find("me_", 1, true)
+      or componentType:find("ae", 1, true)
+    then
+      if not addresses[address] then
+        addresses[address] = true
+        found[#found + 1] = {
+          address = address,
+          componentType = componentType,
+        }
+      end
     end
+  end
+
+  table.sort(
+    found,
+    function(a, b)
+      if a.componentType == b.componentType then
+        return a.address < b.address
+      end
+      return a.componentType < b.componentType
+    end
+  )
+
+  return found
 end
 
-local function drawInfo(type)
-    local line = 2
-    if type == "full" then
-        gpu.fill(1, 1, w, h - 16, " ")
+separator("ДИАГНОСТИКА ДВУХ МЭ-СИСТЕМ")
+
+writeLine(
+  "Компьютер: "
+  .. tostring(computer.address())
+)
+writeLine(
+  "Uptime: "
+  .. tostring(computer.uptime())
+)
+writeLine(
+  "Отчёт: "
+  .. REPORT_PATH
+)
+
+local primaryAddress = nil
+
+if component.isAvailable("me_interface") then
+  local ok, proxy = pcall(
+    function()
+      return component.me_interface
     end
-    for i, ore in pairs(ore_list) do
-        local print_row = line + i
-        if type == "full" then
-            gpu.setForeground(0xFF00FF)
-            local takeAmount = formatNumber(ore.take.amount)
-            gpu.set(29 - #takeAmount, print_row, takeAmount)
-            gpu.set(33, print_row, formatNumber(ore.give.amount))
-            gpu.setForeground(0x00ff00)
-            gpu.set(5, print_row, ore.take.label)
-            gpu.set(42, print_row, ore.give.label)
-            gpu.setForeground(0xFFFF00)
-            gpu.set(30, print_row, unicode.char(0xFF1E))
-            gpu.set(63, print_row, "Доступно:")
-            gpu.setForeground(0x00E5C9)
-            gpu.set(2, print_row + 1, string.rep("═", w - 2))
-        end
-        if type == "full" or type == "ingots" then
-            gpu.fill(73, print_row, w - 73, 1, " ")
-            gpu.setForeground(0xFF00FF)
-            gpu.set(73, print_row, formatNumber(ore.size or 0))
-        end
-        line = line + 1
-    end
-    -- Если это полная перерисовка или обновление доступного, рисуем строку "Общее"
-    drawTotalLine()
+  )
+
+  if ok and type(proxy) == "table" then
+    primaryAddress = proxy.address
+  end
 end
 
-local function updInfo(type)
-    type = type or "full"
-    local check = updIngotsSize()
-    if not check then
-        center(h - 15, "Нет соединения с МЭ или руды не настроены", 0xff0000)
+writeLine(
+  "component.me_interface сейчас указывает на: "
+  .. tostring(primaryAddress or "НЕ НАЙДЕН")
+)
+
+local meComponents = collectMEComponents()
+
+writeLine(
+  "Найдено МЭ-компонентов: "
+  .. tostring(#meComponents)
+)
+
+if #meComponents == 0 then
+  writeLine("")
+  writeLine("ОШИБКА: МЭ-интерфейсы не обнаружены.")
+  writeLine(
+    "Проверьте адаптер, компонентную шину и соединение кабелем."
+  )
+else
+  local summaries = {}
+
+  for index, entry in ipairs(meComponents) do
+    summaries[#summaries + 1] =
+      inspectInterface(
+        index,
+        entry.address,
+        primaryAddress
+      )
+  end
+
+  separator("ОБЩЕЕ СРАВНЕНИЕ")
+
+  local recommended = nil
+
+  for index, summary in ipairs(summaries) do
+    writeLine(string.format(
+      "#%d %s | %s | primary=%s | items=%d | total=%s | craftables=%d | method=%s",
+      index,
+      summary.componentType,
+      summary.address,
+      summary.primary and "YES" or "NO",
+      summary.nonZeroEntries,
+      tostring(summary.totalAmount),
+      summary.craftables,
+      tostring(summary.method or "-")
+    ))
+
+    if not recommended
+      or summary.nonZeroEntries
+        > recommended.nonZeroEntries
+      or (
+        summary.nonZeroEntries
+          == recommended.nonZeroEntries
+        and summary.craftables
+          > recommended.craftables
+      )
+    then
+      recommended = summary
     end
-    drawInfo(type)
-    return check
+  end
+
+  writeLine("")
+
+  if recommended then
+    writeLine(
+      "Предположительно основной интерфейс магазина:"
+    )
+    writeLine(
+      "ME_INTERFACE_ADDRESS = \""
+      .. tostring(recommended.address)
+      .. "\""
+    )
+
+    if primaryAddress
+      and recommended.address ~= primaryAddress
+    then
+      writeLine("")
+      writeLine("ВАЖНО:")
+      writeLine(
+        "component.me_interface выбрал другой компонент."
+      )
+      writeLine(
+        "Это объясняет нулевое количество и пустые шкалы."
+      )
+      writeLine(
+        "В магазине нужно использовать component.proxy по точному адресу."
+      )
+    end
+  end
 end
 
--- Статистика обмена (за сессию)
-local stats = { ores = 0, ingots = 0 }
-local function saveStats()
-    local f = io.open(STATS_FILE, "a")
-    if f then
-        f:write(string.format("[%s] Переработано руды: %d, выдано слитков: %d\n", os.date("%Y-%m-%d %H:%M:%S"), stats.ores, stats.ingots))
-        f:close()
-    end
-end
+separator("ПОЧЕМУ ШКАЛЫ МОГУТ БЫТЬ ПУСТЫМИ")
 
-local function giveIngot(toGive, ore, index)
-    local totalGive = 0
-    local giveDamage = ore.give.damage or 0
-    while totalGive < toGive do
-        local giveSize = math.min(toGive - totalGive, ore.maxSize)
-        local success, res = pcall(me.exportItem, { id = ore.give.name, dmg = giveDamage }, EXPORT_DIR, giveSize)
-        if success and res and res.size and res.size > 0 then
-            totalGive = totalGive + res.size
-            ore_list[index].size = ore_list[index].size - res.size
-            stats.ingots = stats.ingots + res.size
-            drawInfo("ingots")   -- обновляем доступное количество и строку "Общее"
-        else
-            center(h - 15, "Ошибка выдачи слитков! Проверьте место в инвентаре и направление.", 0xff0000)
-            center(h - 14, string.format("Ожидаю выдать %d %s", toGive - totalGive, ore.give.label), 0xFFFFFF)
-            os.sleep(1)
-        end
-    end
-end
+writeLine(
+  "1. При двух me_interface магазин использует только component.me_interface."
+)
+writeLine(
+  "   OpenComputers может выбрать не ту МЭ-сеть."
+)
+writeLine(
+  "2. Код магазина читает getItemsInNetwork()."
+)
+writeLine(
+  "   На другой реализации рабочим может быть getAvailableItems()."
+)
+writeLine(
+  "3. Активная сеть может определяться как me_bridge, а не me_interface."
+)
+writeLine(
+  "4. Интерфейс виден как компонент, но не подключён к рабочей МЭ-сети."
+)
+writeLine(
+  "5. ID или damage отслеживаемого предмета не совпадает с данными МЭ."
+)
+writeLine(
+  "6. При значении 0 из 5M заполненная часть шкалы закономерно имеет длину 0."
+)
 
-local function exchangeOre(slot, ore, index)
-    local curSlot = pim.getStackInSlot(slot)
-    if not curSlot then
-        center(h - 14, "Вы сошли с PIM, обмен прерван.", 0xff0000)
-        os.sleep(1)
-        return false
-    end
-    local userOreSize = curSlot.qty
-    local takeSize = userOreSize - (userOreSize % ore.take.amount)
-    if takeSize == 0 then return true end
-    local giveSize = (takeSize / ore.take.amount) * ore.give.amount
+separator("СЛЕДУЮЩИЙ ШАГ")
 
-    if ore.size < giveSize then
-        center(h - 14, string.format("%s недостаточно для обмена (в МЭ %d, надо %d)", ore.give.label, ore.size, giveSize), 0xff0000)
-        os.sleep(2)
-        return false
-    end
+writeLine(
+  "Отправьте содержимое этого файла:"
+)
+writeLine(
+  REPORT_PATH
+)
+writeLine("")
+writeLine(
+  "Команда просмотра:"
+)
+writeLine(
+  "cat " .. REPORT_PATH
+)
 
-    local takedOre = pim.pushItem(PUSH_DIR, slot, takeSize)
-    if not takedOre or takedOre == 0 then
-        center(h - 14, "Не удалось вытолкнуть руду. Проверьте, что снизу есть ME интерфейс.", 0xff0000)
-        os.sleep(2)
-        return false
-    end
-
-    local actualGive = math.floor(takedOre / ore.take.amount) * ore.give.amount
-    stats.ores = stats.ores + takedOre
-    -- Обновляем глобальный счётчик и сохраняем
-    total_ores_global = total_ores_global + takedOre
-    saveTotalOres()
-    -- Обновляем строку "Общее" на экране
-    drawTotalLine()
-    
-    center(h - 14, string.format("Меняю %d %s на %d %s", takedOre, ore.take.label, actualGive, ore.give.label), 0xffffff)
-    giveIngot(actualGive, ore, index)
-    gpu.fill(1, h - 14, w, 1, " ")
-    return true
-end
-
-local function checkInventory()
-    for i = 2, 1, -1 do
-        center(h - 14, string.format("Обмен через %d сек...", i), 0x505050)
-        os.sleep(1)
-    end
-    local size = pim.getInventorySize()
-    local data = pim.getAllStacks(0)
-    local forceBreak = false
-    for slot = 1, size do
-        if forceBreak then break end
-        if data[slot] then
-            for index, ore in pairs(ore_list) do
-                local needDamage = ore.take.damage or 0
-                if data[slot].id == ore.take.name and data[slot].dmg == needDamage then
-                    if not exchangeOre(slot, ore, index) then
-                        forceBreak = true
-                        break
-                    end
-                end
-            end
-        end
-    end
-    drawInfo("ingots")
-    center(h - 15, string.format("Обмен окончен! Переработано: %d руды → %d слитков", stats.ores, stats.ingots), 0xffffff)
-    saveStats()
-    if pim.getInventoryName() ~= "pim" then
-        return checkInventory()
-    else
-        event.push("player_off")
-    end
-end
-
-local function isAdmin(user)
-    for _, adminUser in pairs(table.pack(computer.users())) do
-        if adminUser == user then return true end
-    end
-    return false
-end
-
-local function drawLogo(x, y, color)
-    local dragon_x = 9
-    local exchanger_x = 4
-    local dragonLines = {
-        "  ██████╗ ██████╗  █████╗ ██████╗ ██╗  ██╗ ██████╗ ███╗   ██╗",
-        "  ██╔══██╗██╔══██╗██╔══██╗██╔══██╗██║ ██╔╝██╔═══██╗████╗  ██║",
-        "  ██║  ██║██████╔╝███████║██║  ██║█████╔╝ ██║   ██║██╔██╗ ██║",
-        "  ██║  ██║██╔══██╗██╔══██║██║  ██║██╔═██╗ ██║   ██║██║╚██╗██║",
-        "  ██████╔╝██║  ██║██║  ██║██████╔╝██║  ██╗╚██████╔╝██║ ╚████║",
-        "  ╚═════╝ ╚═╝  ╚═╝╚═╝  ╚═╝╚═════╝ ╚═╝  ╚═╝ ╚═════╝ ╚═╝  ╚═══╝",
-    }
-    local exchangerLines = {
-        "███████╗██╗  ██╗ ██████╗██╗  ██╗ █████╗ ███╗   ██╗ ██████╗ ███████╗██████╗ ",
-        "██╔════╝╚██╗██╔╝██╔════╝██║  ██║██╔══██╗████╗  ██║██╔════╝ ██╔════╝██╔══██╗",
-        "█████╗   ╚███╔╝ ██║     ███████║███████║██╔██╗ ██║██║  ███╗█████╗  ██████╔╝",
-        "██╔══╝   ██╔██╗ ██║     ██╔══██║██╔══██║██║╚██╗██║██║   ██║██╔══╝  ██╔══██╗",
-        "███████╗██╔╝ ██╗╚██████╗██║  ██║██║  ██║██║ ╚████║╚██████╔╝███████╗██║  ██║",
-        "╚══════╝╚═╝  ╚═╝ ╚═════╝╚═╝  ╚═╝╚═╝  ╚═╝╚═╝  ╚═══╝ ╚═════╝ ╚══════╝╚═╝  ╚═╝",
-    }
-    gpu.setForeground(color)
-    for i, line in ipairs(dragonLines) do
-        gpu.set(dragon_x, y + i - 1, line)
-    end
-    for i, line in ipairs(exchangerLines) do
-        gpu.set(exchanger_x, y + 6 + i - 1, line)
-    end
-end
-
-local function handleEvent(eventName, ...)
-    local args = { ... }
-    if eventName == "interrupted" then
-        gpu.setBackground(defBG)
-        gpu.setForeground(defFG)
-        gpu.fill(1, 1, w, h, " ")
-        os.exit()
-        return true
-    elseif eventName == "player_on" then
-        if not updInfo("ingots") then return end
-        center(h - 15, string.format("Приветствую, %s! Начинаю обмен", args[1]), 0xffffff)
-        stats.ores = 0
-        stats.ingots = 0
-        checkInventory()
-    elseif eventName == "player_off" then
-        if not updInfo("ingots") then return end
-        center(h - 15, "Для обмена встаньте на PIM и не сходите до окончания обмена", 0xffffff)
-        center(h - 14, "Обновлю доступные руды и связь с МЭ как только наступите", 0x505050)
-    elseif eventName == "touch" and args[2] >= w - 38 and args[3] >= h - 1 and isAdmin(args[5]) then
-        computer.beep(1500, 0.1)
-        for i = 5, 1, -1 do
-            center(h - 14, string.format("Начну сканировать инвентарь через %d сек...", i), 0x505050)
-            os.sleep(1)
-        end
-        center(h - 14, "Сканирую...", 0xffffff)
-        computer.beep(1500, 0.8)
-        if pim.getInventoryName() ~= "pim" then
-            ore_list = {}
-            local data = pim.getAllStacks(0)
-            local i = 10
-            while i ~= 9 do
-                if i == 18 or i == 27 then i = i + 1
-                elseif i == 36 then i = 1
-                end
-                if data[i] and data[i+1] then
-                    table.insert(ore_list, {
-                        take = { label = data[i].display_name, name = data[i].id, damage = data[i].dmg, amount = math.floor(data[i].qty) },
-                        give = { label = data[i+1].display_name, name = data[i+1].id, damage = data[i+1].dmg, amount = math.floor(data[i+1].qty) }
-                    })
-                end
-                i = i + 2
-            end
-            saveOres(ore_list)
-            center(h - 14, "Обмен записан!", 0x00ff00)
-            computer.beep(500, 0.2)
-            updInfo()
-        else
-            center(h - 14, "Не увидел инвентарь!", 0xff0000)
-            computer.beep(2000, 0.2)
-            computer.beep(2000, 0.2)
-        end
-        os.sleep(1)
-        for i = 5, 1, -1 do
-            center(h - 14, string.format("Заработаю через %d сек...", i), 0x505050)
-            os.sleep(1)
-        end
-        center(h - 14, "Обновлю доступные руды и связь с МЭ как только наступите", 0x505050)
-    end
-end
-
-local function main()
-    gpu.fill(1, 1, w, h, " ")
-    if updInfo() then
-        center(h - 15, "Для обмена встаньте на PIM и не сходите до окончания обмена", 0xffffff)
-    end
-    center(h - 14, "Обновлю доступные руды и связь с МЭ как только наступите", 0x505050)
-    drawLogo(8, h - 12, accent)
-    while true do
-        handleEvent(event.pull(1))
-    end
-end
-
-while true do
-    local success, err = pcall(main)
-    if not success and #err > 0 then
-        io.open(currDir .. "/exchanger_errors.txt", "ab"):write(err .. "\n"):close()
-        computer.beep(2000, 3)
-    elseif not success then
-        break
-    end
+if saveReport() then
+  writeLine("")
+  writeLine("ГОТОВО: отчёт сохранён.")
+else
+  writeLine("")
+  writeLine("ОШИБКА: отчёт не удалось сохранить.")
 end
