@@ -1,869 +1,1256 @@
+-- terminal_hardware_scan.lua
+-- Безопасный сканер оборудования терминала обменника.
+-- Записывает адреса компонентов, стороны сундуков, направления ME Interface
+-- и готовый блок настроек в terminal_hardware_report.txt.
+--
+-- ПОДГОТОВКА ПЕРЕД ЗАПУСКОМ:
+-- 1. В ПЕРВЫЙ сундук положить ровно 1 блок земли.
+-- 2. Во ВТОРОЙ сундук положить ровно 1 блок булыжника.
+-- 3. В ячейке ME Chest должна быть минимум 1 железная руда.
+-- 4. В основной МЭ должен быть минимум 1 железный слиток.
+-- 5. Настроечные слоты обоих ME Interface должны быть пустыми.
+--
+-- Активный тест переносит максимум по одному тестовому предмету
+-- и сразу пытается вернуть его обратно в исходную МЭ-сеть.
+
 local component = require("component")
 local computer = require("computer")
+local shell = require("shell")
+local serialization = require("serialization")
+local sides = require("sides")
 
-local sidesOk, sides = pcall(require, "sides")
-if not sidesOk or type(sides) ~= "table" then
-  sides = {
-    bottom = 0,
-    top = 1,
-    back = 2,
-    front = 3,
-    right = 4,
-    left = 5,
-    down = 0,
-    up = 1,
-  }
+local REPORT_FILE =
+    shell.getWorkingDirectory() .. "/terminal_hardware_report.txt"
+
+-- true  = определить точные направления exportItem/pullItem;
+-- false = только пассивное сканирование без перемещения предметов.
+local ACTIVE_DIRECTION_TEST = true
+
+local FIRST_CHEST_MARKER = {
+    id = "minecraft:dirt",
+    damage = 0,
+    label = "Земля"
+}
+
+local SECOND_CHEST_MARKER = {
+    id = "minecraft:cobblestone",
+    damage = 0,
+    label = "Булыжник"
+}
+
+local CELL_TEST_ITEM = {
+    id = "minecraft:iron_ore",
+    damage = 0,
+    label = "Железная руда"
+}
+
+local MAIN_TEST_ITEM = {
+    id = "minecraft:iron_ingot",
+    damage = 0,
+    label = "Железный слиток"
+}
+
+local DIRECTIONS = {
+    "DOWN",
+    "UP",
+    "NORTH",
+    "SOUTH",
+    "WEST",
+    "EAST"
+}
+
+local SIDE_NAMES = {
+    [sides.bottom] = "BOTTOM",
+    [sides.top] = "TOP",
+    [sides.back] = "BACK",
+    [sides.front] = "FRONT",
+    [sides.right] = "RIGHT",
+    [sides.left] = "LEFT"
+}
+
+local report = {}
+
+local function add(text)
+    text = tostring(text or "")
+    report[#report + 1] = text
+    print(text)
 end
 
-local REPORT_PATH = "/home/me_dual_system_report.txt"
-local SAMPLE_ITEMS = 12
-local SAMPLE_CRAFTABLES = 8
-
-local output = {}
-
-local function writeLine(value)
-  value = tostring(value or "")
-  output[#output + 1] = value
-  print(value)
+local function separator()
+    add(string.rep("=", 64))
 end
 
-local function saveReport()
-  local file, err = io.open(REPORT_PATH, "w")
-  if not file then
-    print("Не удалось сохранить отчёт: " .. tostring(err))
-    return false
-  end
-
-  file:write(table.concat(output, "\n"))
-  file:write("\n")
-  file:close()
-  return true
+local function subSeparator()
+    add(string.rep("-", 64))
 end
 
-local function separator(title)
-  writeLine("")
-  writeLine("============================================================")
-  writeLine(title)
-  writeLine("============================================================")
+local function safeSerialize(value)
+    local ok, result = pcall(serialization.serialize, value)
+    if ok then
+        return result
+    end
+    return "<ошибка сериализации: " .. tostring(result) .. ">"
 end
 
-local function shortAddress(address)
-  address = tostring(address or "")
-  if #address <= 12 then return address end
-  return address:sub(1, 8) .. "..." .. address:sub(-4)
+local function sleep(seconds)
+    local deadline = computer.uptime() + (tonumber(seconds) or 0)
+    while computer.uptime() < deadline do
+        computer.pullSignal(math.max(0, deadline - computer.uptime()))
+    end
 end
 
-local function countTable(tbl)
-  if type(tbl) ~= "table" then return 0 end
-  local count = 0
-  for _ in pairs(tbl) do
-    count = count + 1
-  end
-  return count
-end
-
-local function sortedKeys(tbl)
-  local result = {}
-  if type(tbl) ~= "table" then return result end
-
-  for key in pairs(tbl) do
-    result[#result + 1] = tostring(key)
-  end
-
-  table.sort(result)
-  return result
-end
-
-local function safeType(address)
-  local ok, value = pcall(component.type, address)
-  if ok then return tostring(value or "unknown") end
-  return "unknown"
-end
-
-local function safeMethods(address)
-  local ok, value = pcall(component.methods, address)
-  if ok and type(value) == "table" then
-    return value
-  end
-  return {}
-end
-
-local function hasMethod(methods, name)
-  return type(methods) == "table" and methods[name] ~= nil
+local function methodExists(address, methodName)
+    local methods = component.methods(address) or {}
+    return methods[methodName] ~= nil
 end
 
 local function invoke(address, methodName, ...)
-  local ok, a, b, c, d = pcall(
-    component.invoke,
-    address,
-    methodName,
-    ...
-  )
-
-  if not ok then
-    return false, tostring(a)
-  end
-
-  return true, a, b, c, d
+    return pcall(component.invoke, address, methodName, ...)
 end
 
-local function getDoc(address, methodName)
-  local ok, value = pcall(component.doc, address, methodName)
-  if ok and value then return tostring(value) end
-  return nil
-end
-
-local function normalizeItem(item)
-  if type(item) ~= "table" then
-    return nil
-  end
-
-  local fingerprint =
-    type(item.fingerprint) == "table"
-    and item.fingerprint
-    or item
-
-  local id =
-    fingerprint.id
-    or fingerprint.name
-    or item.id
-    or item.name
-    or item.internalName
-
-  local damage = tonumber(
-    fingerprint.dmg
-    or fingerprint.damage
-    or item.dmg
-    or item.damage
-  ) or 0
-
-  local amount = tonumber(
-    item.size
-    or item.qty
-    or item.count
-    or item.amount
-    or fingerprint.size
-    or fingerprint.qty
-    or fingerprint.count
-  ) or 0
-
-  local displayName =
-    item.label
-    or item.displayName
-    or fingerprint.label
-    or fingerprint.displayName
-
-  return {
-    id = id and tostring(id) or nil,
-    damage = damage,
-    amount = amount,
-    label = displayName and tostring(displayName) or nil,
-    craftable =
-      item.isCraftable == true
-      or fingerprint.isCraftable == true,
-  }
-end
-
-local function summarizeNetworkItems(items)
-  if type(items) ~= "table" then
-    return {
-      entries = 0,
-      nonZeroEntries = 0,
-      totalAmount = 0,
-      samples = {},
-    }
-  end
-
-  local summary = {
-    entries = 0,
-    nonZeroEntries = 0,
-    totalAmount = 0,
-    samples = {},
-  }
-
-  for _, rawItem in pairs(items) do
-    summary.entries = summary.entries + 1
-
-    local item = normalizeItem(rawItem)
-    if item then
-      if item.amount > 0 then
-        summary.nonZeroEntries =
-          summary.nonZeroEntries + 1
-      end
-
-      summary.totalAmount =
-        summary.totalAmount + item.amount
-
-      if #summary.samples < SAMPLE_ITEMS then
-        summary.samples[#summary.samples + 1] = item
-      end
+local function stackName(stack)
+    if not stack then
+        return nil
     end
-  end
-
-  return summary
+    return stack.name or stack.id or stack.internalName
 end
 
-local function printNetworkSummary(methodName, ok, result)
-  writeLine("")
-  writeLine("Проверка " .. methodName .. ":")
-
-  if not ok then
-    writeLine("  ОШИБКА: " .. tostring(result))
-    return nil
-  end
-
-  if type(result) ~= "table" then
-    writeLine(
-      "  Метод вернул не таблицу: "
-      .. tostring(result)
-      .. " ["
-      .. type(result)
-      .. "]"
-    )
-    return nil
-  end
-
-  local summary = summarizeNetworkItems(result)
-
-  writeLine(
-    "  Записей в ответе: "
-    .. tostring(summary.entries)
-  )
-  writeLine(
-    "  Записей с количеством > 0: "
-    .. tostring(summary.nonZeroEntries)
-  )
-  writeLine(
-    "  Суммарное количество предметов: "
-    .. tostring(summary.totalAmount)
-  )
-
-  if #summary.samples == 0 then
-    writeLine("  Примеры предметов: нет")
-  else
-    writeLine("  Первые предметы:")
-
-    for index, item in ipairs(summary.samples) do
-      writeLine(string.format(
-        "    %02d. %s:%d | qty=%s | %s%s",
-        index,
-        tostring(item.id or "<нет id>"),
-        tonumber(item.damage) or 0,
-        tostring(item.amount or 0),
-        tostring(item.label or "без названия"),
-        item.craftable and " | craftable" or ""
-      ))
+local function stackDamage(stack)
+    if not stack then
+        return 0
     end
-  end
-
-  return summary
+    return tonumber(stack.damage or stack.dmg or stack.meta) or 0
 end
 
-local function callCraftableGetItemStack(craftable)
-  if type(craftable) ~= "table"
-    or type(craftable.getItemStack) ~= "function"
-  then
-    return false, "getItemStack отсутствует"
-  end
-
-  local ok, result = pcall(craftable.getItemStack)
-  if ok then return true, result end
-
-  ok, result = pcall(
-    craftable.getItemStack,
-    craftable
-  )
-  if ok then return true, result end
-
-  return false, tostring(result)
-end
-
-local function inspectCraftables(address, methods)
-  if not hasMethod(methods, "getCraftables") then
-    writeLine("")
-    writeLine("Проверка getCraftables:")
-    writeLine("  Метод отсутствует")
-    return 0
-  end
-
-  local ok, craftables = invoke(
-    address,
-    "getCraftables"
-  )
-
-  writeLine("")
-  writeLine("Проверка getCraftables:")
-
-  if not ok then
-    writeLine("  ОШИБКА: " .. tostring(craftables))
-    return 0
-  end
-
-  if type(craftables) ~= "table" then
-    writeLine(
-      "  Вернулся тип "
-      .. type(craftables)
-      .. ": "
-      .. tostring(craftables)
-    )
-    return 0
-  end
-
-  local total = countTable(craftables)
-  writeLine("  Найдено шаблонов: " .. tostring(total))
-
-  local shown = 0
-  for _, craftable in pairs(craftables) do
-    if shown >= SAMPLE_CRAFTABLES then break end
-    shown = shown + 1
-
-    local stackOk, stack =
-      callCraftableGetItemStack(craftable)
-
-    if stackOk and type(stack) == "table" then
-      local item = normalizeItem(stack)
-      if item then
-        writeLine(string.format(
-          "    %02d. %s:%d | %s",
-          shown,
-          tostring(item.id or "<нет id>"),
-          tonumber(item.damage) or 0,
-          tostring(item.label or "без названия")
-        ))
-      else
-        writeLine(
-          "    "
-          .. tostring(shown)
-          .. ". getItemStack вернул таблицу без id"
+local function stackAmount(stack)
+    if not stack then
+        return 0
+    end
+    return math.max(
+        0,
+        math.floor(
+            tonumber(
+                stack.size
+                or stack.qty
+                or stack.amount
+                or stack.count
+            ) or 0
         )
-      end
-    else
-      writeLine(
-        "    "
-        .. tostring(shown)
-        .. ". "
-        .. tostring(stack)
-      )
-    end
-  end
-
-  return total
+    )
 end
 
-local sideOrder = {
-  {"bottom/down", 0},
-  {"top/up", 1},
-  {"back", 2},
-  {"front", 3},
-  {"right", 4},
-  {"left", 5},
-}
+local function resultAmount(result, extraResult)
+    local function read(value)
+        if type(value) == "number" then
+            return math.max(0, math.floor(value))
+        end
 
-local function callSideMethod(
-  address,
-  methods,
-  methodName,
-  sideNumber,
-  sideLabel
-)
-  if not hasMethod(methods, methodName) then
+        if type(value) == "table" then
+            return math.max(
+                0,
+                math.floor(
+                    tonumber(
+                        value.size
+                        or value.qty
+                        or value.amount
+                        or value.count
+                        or value.exported
+                        or value[1]
+                    ) or 0
+                )
+            )
+        end
+
+        return 0
+    end
+
+    local amount = read(result)
+    if amount > 0 then
+        return amount
+    end
+
+    return read(extraResult)
+end
+
+local function getInventorySize(transposer, side)
+    local ok, size = pcall(transposer.getInventorySize, side)
+
+    if not ok or not tonumber(size) then
+        return nil
+    end
+
+    return math.floor(tonumber(size))
+end
+
+local function getInventoryName(transposer, side)
+    local ok, name = pcall(transposer.getInventoryName, side)
+
+    if ok then
+        return name
+    end
+
     return nil
-  end
-
-  local attempts = {
-    sideNumber,
-    sideLabel,
-  }
-
-  if sideNumber == 0 then
-    attempts[#attempts + 1] = "down"
-    attempts[#attempts + 1] = "bottom"
-  elseif sideNumber == 1 then
-    attempts[#attempts + 1] = "up"
-    attempts[#attempts + 1] = "top"
-  end
-
-  for _, argument in ipairs(attempts) do
-    local ok, value = invoke(
-      address,
-      methodName,
-      argument
-    )
-
-    if ok and value ~= nil then
-      return tostring(value), tostring(argument)
-    end
-  end
-
-  return nil
 end
 
-local function inspectSides(address, methods)
-  separator("ПОДКЛЮЧЁННЫЕ СТОРОНЫ")
-
-  writeLine(
-    "Стандартная нумерация OpenComputers:"
-  )
-
-  for _, side in ipairs(sideOrder) do
-    writeLine(
-      "  "
-      .. tostring(side[2])
-      .. " = "
-      .. tostring(side[1])
-    )
-  end
-
-  local supportsInventory =
-    hasMethod(methods, "getInventoryName")
-    or hasMethod(methods, "getInventorySize")
-
-  if not supportsInventory then
-    writeLine("")
-    writeLine(
-      "У компонента нет getInventoryName/getInventorySize."
-    )
-    writeLine(
-      "Определить подключённую сторону пассивно невозможно."
-    )
-    writeLine(
-      "Смотрите документацию exportItem/importItem ниже."
-    )
-    return
-  end
-
-  writeLine("")
-  writeLine("Проверка соседних инвентарей:")
-
-  for _, side in ipairs(sideOrder) do
-    local label = side[1]
-    local number = side[2]
-
-    local inventoryName, nameArg = callSideMethod(
-      address,
-      methods,
-      "getInventoryName",
-      number,
-      label
-    )
-
-    local inventorySize, sizeArg = callSideMethod(
-      address,
-      methods,
-      "getInventorySize",
-      number,
-      label
-    )
-
-    writeLine(string.format(
-      "  side %d (%s): name=%s; size=%s; args=%s/%s",
-      number,
-      label,
-      tostring(inventoryName or "-"),
-      tostring(inventorySize or "-"),
-      tostring(nameArg or "-"),
-      tostring(sizeArg or "-")
-    ))
-  end
-end
-
-local importantDocs = {
-  "getItemsInNetwork",
-  "getAvailableItems",
-  "getCraftables",
-  "getItemDetail",
-  "exportItem",
-  "importItem",
-  "getInventoryName",
-  "getInventorySize",
-  "listSources",
-}
-
-local function inspectInterface(
-  number,
-  address,
-  primaryAddress
+local function countItemInInventory(
+    transposer,
+    side,
+    itemId,
+    damage
 )
-  local componentType = safeType(address)
-  local methods = safeMethods(address)
+    local size = getInventorySize(transposer, side)
 
-  separator(
-    "МЭ-СИСТЕМА #"
-    .. tostring(number)
-    .. " | "
-    .. componentType
-    .. " | "
-    .. address
-  )
-
-  writeLine(
-    "Короткий адрес: "
-    .. shortAddress(address)
-  )
-  writeLine(
-    "Выбрана через component.me_interface: "
-    .. (
-      address == primaryAddress
-      and "ДА — именно её сейчас берёт магазин"
-      or "НЕТ"
-    )
-  )
-
-  local methodNames = sortedKeys(methods)
-
-  writeLine(
-    "Количество методов: "
-    .. tostring(#methodNames)
-  )
-
-  if #methodNames > 0 then
-    writeLine("Методы:")
-    local currentLine = "  "
-
-    for _, methodName in ipairs(methodNames) do
-      local addition = methodName .. ", "
-
-      if #currentLine + #addition > 100 then
-        writeLine(currentLine)
-        currentLine = "  " .. addition
-      else
-        currentLine = currentLine .. addition
-      end
+    if not size then
+        return 0
     end
 
-    if currentLine ~= "  " then
-      writeLine(currentLine)
-    end
-  end
+    local total = 0
 
-  writeLine("")
-  writeLine("Документация важных методов:")
-
-  for _, methodName in ipairs(importantDocs) do
-    if hasMethod(methods, methodName) then
-      writeLine(
-        "  "
-        .. methodName
-        .. ": "
-        .. tostring(
-          getDoc(address, methodName)
-          or "<документация отсутствует>"
+    for slot = 1, size do
+        local ok, stack = pcall(
+            transposer.getStackInSlot,
+            side,
+            slot
         )
-      )
+
+        if ok
+            and stack
+            and stackName(stack) == itemId
+            and stackDamage(stack) == (damage or 0) then
+
+            total = total + stackAmount(stack)
+        end
     end
-  end
 
-  local bestSummary = nil
-  local bestMethod = nil
+    return total
+end
 
-  if hasMethod(methods, "getItemsInNetwork") then
-    local ok, result = invoke(
-      address,
-      "getItemsInNetwork"
-    )
+local function findItemSlot(
+    transposer,
+    side,
+    itemId,
+    damage
+)
+    local size = getInventorySize(transposer, side)
 
-    local summary = printNetworkSummary(
-      "getItemsInNetwork()",
-      ok,
-      result
-    )
-
-    if summary then
-      bestSummary = summary
-      bestMethod = "getItemsInNetwork"
+    if not size then
+        return nil
     end
-  else
-    writeLine("")
-    writeLine("Проверка getItemsInNetwork:")
-    writeLine("  Метод отсутствует")
-  end
 
-  if hasMethod(methods, "getAvailableItems") then
-    local ok, result = invoke(
-      address,
-      "getAvailableItems",
-      "NONE"
-    )
+    for slot = 1, size do
+        local ok, stack = pcall(
+            transposer.getStackInSlot,
+            side,
+            slot
+        )
 
-    if not ok then
-      ok, result = invoke(
-        address,
+        if ok
+            and stack
+            and stackName(stack) == itemId
+            and stackDamage(stack) == (damage or 0)
+            and stackAmount(stack) > 0 then
+
+            return slot, stackAmount(stack)
+        end
+    end
+
+    return nil
+end
+
+local function getNetworkItems(address)
+    local methods = component.methods(address) or {}
+    local methodOrder = {
+        "getItemsInNetwork",
         "getAvailableItems"
-      )
+    }
+
+    for _, methodName in ipairs(methodOrder) do
+        if methods[methodName] ~= nil then
+            local ok, items = invoke(address, methodName)
+
+            if ok and type(items) == "table" then
+                return items, methodName, nil
+            end
+        end
     end
 
-    local summary = printNetworkSummary(
-      "getAvailableItems(\"NONE\") / без аргументов",
-      ok,
-      result
-    )
-
-    if summary
-      and (
-        not bestSummary
-        or summary.nonZeroEntries
-          > bestSummary.nonZeroEntries
-      )
-    then
-      bestSummary = summary
-      bestMethod = "getAvailableItems"
-    end
-  else
-    writeLine("")
-    writeLine("Проверка getAvailableItems:")
-    writeLine("  Метод отсутствует")
-  end
-
-  local craftableCount =
-    inspectCraftables(address, methods)
-
-  inspectSides(address, methods)
-
-  separator("ИТОГ ПО МЭ-СИСТЕМЕ #" .. tostring(number))
-
-  writeLine(
-    "Рабочий метод чтения предметов: "
-    .. tostring(bestMethod or "НЕ НАЙДЕН")
-  )
-
-  if bestSummary then
-    writeLine(
-      "Видимых ненулевых позиций: "
-      .. tostring(bestSummary.nonZeroEntries)
-    )
-    writeLine(
-      "Суммарное количество: "
-      .. tostring(bestSummary.totalAmount)
-    )
-  else
-    writeLine("Предметы прочитать не удалось")
-  end
-
-  writeLine(
-    "Количество шаблонов: "
-    .. tostring(craftableCount)
-  )
-
-  return {
-    address = address,
-    componentType = componentType,
-    primary = address == primaryAddress,
-    method = bestMethod,
-    nonZeroEntries =
-      bestSummary and bestSummary.nonZeroEntries or 0,
-    totalAmount =
-      bestSummary and bestSummary.totalAmount or 0,
-    craftables = craftableCount,
-  }
+    return nil, nil, "не удалось получить список предметов"
 end
 
-local function collectMEComponents()
-  local found = {}
-  local addresses = {}
+local function readNetworkInfo(address)
+    local items, usedMethod, readError = getNetworkItems(address)
 
-  local acceptedTypes = {
-    me_interface = true,
-    me_bridge = true,
-    me_controller = true,
-  }
+    local info = {
+        address = address,
+        items = items,
+        usedMethod = usedMethod,
+        error = readError,
+        recordCount = 0,
+        totalAmount = 0,
+        sample = {},
+        amounts = {}
+    }
 
-  for address, componentType in component.list() do
-    componentType = tostring(componentType or "")
+    if not items then
+        return info
+    end
 
-    if acceptedTypes[componentType]
-      or componentType:find("me_", 1, true)
-      or componentType:find("ae", 1, true)
-    then
-      if not addresses[address] then
-        addresses[address] = true
-        found[#found + 1] = {
-          address = address,
-          componentType = componentType,
+    for _, item in pairs(items) do
+        if type(item) == "table" then
+            local name = stackName(item)
+            local damage = stackDamage(item)
+            local amount = stackAmount(item)
+
+            info.recordCount = info.recordCount + 1
+            info.totalAmount = info.totalAmount + amount
+
+            if name then
+                local key = tostring(name)
+                    .. ":"
+                    .. tostring(math.floor(damage))
+
+                info.amounts[key] =
+                    (info.amounts[key] or 0) + amount
+
+                if #info.sample < 12 then
+                    info.sample[#info.sample + 1] = {
+                        name = name,
+                        damage = damage,
+                        amount = amount
+                    }
+                end
+            end
+        end
+    end
+
+    return info
+end
+
+local function networkAmount(info, itemId, damage)
+    if not info then
+        return 0
+    end
+
+    local key = tostring(itemId)
+        .. ":"
+        .. tostring(math.floor(tonumber(damage) or 0))
+
+    return math.floor(tonumber(info.amounts[key]) or 0)
+end
+
+local function makeFingerprint(item)
+    local fingerprint = {
+        id = stackName(item),
+        dmg = stackDamage(item)
+    }
+
+    if type(item) == "table"
+        and item.nbt_hash ~= nil then
+
+        fingerprint.nbt_hash = item.nbt_hash
+    end
+
+    return fingerprint
+end
+
+local function findNetworkItem(info, itemId, damage)
+    if not info or type(info.items) ~= "table" then
+        return nil
+    end
+
+    for _, item in pairs(info.items) do
+        if type(item) == "table"
+            and stackName(item) == itemId
+            and stackDamage(item) == (damage or 0)
+            and stackAmount(item) > 0 then
+
+            return item
+        end
+    end
+
+    return nil
+end
+
+local function scanTransposers()
+    local results = {}
+
+    separator()
+    add("TRANSPOSER И СОСЕДНИЕ ИНВЕНТАРИ")
+    separator()
+
+    local number = 0
+
+    for address in component.list("transposer") do
+        number = number + 1
+
+        local transposer = component.proxy(address)
+        local result = {
+            address = address,
+            proxy = transposer,
+            firstChestSide = nil,
+            secondChestSide = nil,
+            inventories = {}
         }
-      end
-    end
-  end
 
-  table.sort(
-    found,
-    function(a, b)
-      if a.componentType == b.componentType then
-        return a.address < b.address
-      end
-      return a.componentType < b.componentType
-    end
-  )
+        add("")
+        add("TRANSPOSER №" .. tostring(number))
+        add("Адрес: " .. tostring(address))
 
-  return found
+        for side = 0, 5 do
+            local size = getInventorySize(transposer, side)
+
+            if size then
+                local inventoryName =
+                    getInventoryName(transposer, side)
+
+                local entry = {
+                    side = side,
+                    sideName = SIDE_NAMES[side] or tostring(side),
+                    inventoryName = inventoryName,
+                    size = size
+                }
+
+                result.inventories[#result.inventories + 1] =
+                    entry
+
+                add("")
+                add(
+                    "Сторона: "
+                    .. tostring(entry.sideName)
+                    .. " ("
+                    .. tostring(side)
+                    .. ")"
+                )
+                add(
+                    "Инвентарь: "
+                    .. tostring(inventoryName)
+                )
+                add("Размер: " .. tostring(size))
+
+                local firstMarkerAmount =
+                    countItemInInventory(
+                        transposer,
+                        side,
+                        FIRST_CHEST_MARKER.id,
+                        FIRST_CHEST_MARKER.damage
+                    )
+
+                local secondMarkerAmount =
+                    countItemInInventory(
+                        transposer,
+                        side,
+                        SECOND_CHEST_MARKER.id,
+                        SECOND_CHEST_MARKER.damage
+                    )
+
+                if firstMarkerAmount > 0 then
+                    result.firstChestSide = side
+                    add(
+                        ">>> ПЕРВЫЙ СУНДУК: найдена метка "
+                        .. FIRST_CHEST_MARKER.label
+                    )
+                end
+
+                if secondMarkerAmount > 0 then
+                    result.secondChestSide = side
+                    add(
+                        ">>> ВТОРОЙ СУНДУК: найдена метка "
+                        .. SECOND_CHEST_MARKER.label
+                    )
+                end
+
+                local shown = 0
+
+                for slot = 1, size do
+                    local ok, stack = pcall(
+                        transposer.getStackInSlot,
+                        side,
+                        slot
+                    )
+
+                    if ok and stack and shown < 10 then
+                        shown = shown + 1
+
+                        add(
+                            "Слот "
+                            .. tostring(slot)
+                            .. ": "
+                            .. tostring(stackName(stack))
+                            .. " | damage="
+                            .. tostring(stackDamage(stack))
+                            .. " | количество="
+                            .. tostring(stackAmount(stack))
+                        )
+                    end
+                end
+
+                if shown == 0 then
+                    add("Содержимое: пусто")
+                elseif shown >= 10 then
+                    add(
+                        "Показаны первые 10 занятых слотов."
+                    )
+                end
+            end
+        end
+
+        results[#results + 1] = result
+
+        subSeparator()
+    end
+
+    if number == 0 then
+        add("TRANSPOSER НЕ НАЙДЕН")
+    end
+
+    return results
 end
 
-separator("ДИАГНОСТИКА ДВУХ МЭ-СИСТЕМ")
+local function chooseBridgeTransposer(results)
+    for _, result in ipairs(results) do
+        if result.firstChestSide ~= nil
+            and result.secondChestSide ~= nil then
 
-writeLine(
-  "Компьютер: "
-  .. tostring(computer.address())
-)
-writeLine(
-  "Uptime: "
-  .. tostring(computer.uptime())
-)
-writeLine(
-  "Отчёт: "
-  .. REPORT_PATH
-)
-
-local primaryAddress = nil
-
-if component.isAvailable("me_interface") then
-  local ok, proxy = pcall(
-    function()
-      return component.me_interface
+            return result
+        end
     end
-  )
 
-  if ok and type(proxy) == "table" then
-    primaryAddress = proxy.address
-  end
+    return nil
 end
 
-writeLine(
-  "component.me_interface сейчас указывает на: "
-  .. tostring(primaryAddress or "НЕ НАЙДЕН")
-)
+local function scanInterfaces()
+    local results = {}
 
-local meComponents = collectMEComponents()
+    separator()
+    add("ME INTERFACE")
+    separator()
 
-writeLine(
-  "Найдено МЭ-компонентов: "
-  .. tostring(#meComponents)
-)
+    local number = 0
 
-if #meComponents == 0 then
-  writeLine("")
-  writeLine("ОШИБКА: МЭ-интерфейсы не обнаружены.")
-  writeLine(
-    "Проверьте адаптер, компонентную шину и соединение кабелем."
-  )
-else
-  local summaries = {}
+    for address in component.list("me_interface") do
+        number = number + 1
 
-  for index, entry in ipairs(meComponents) do
-    summaries[#summaries + 1] =
-      inspectInterface(
-        index,
-        entry.address,
-        primaryAddress
-      )
-  end
+        local info = readNetworkInfo(address)
+        results[#results + 1] = info
 
-  separator("ОБЩЕЕ СРАВНЕНИЕ")
+        add("")
+        add("ME INTERFACE №" .. tostring(number))
+        add("Адрес: " .. tostring(address))
+        add(
+            "Метод чтения сети: "
+            .. tostring(info.usedMethod or info.error)
+        )
+        add(
+            "Видов предметов: "
+            .. tostring(info.recordCount)
+        )
+        add(
+            "Общее количество предметов: "
+            .. tostring(info.totalAmount)
+        )
 
-  local recommended = nil
+        add(
+            "Железной руды: "
+            .. tostring(
+                networkAmount(
+                    info,
+                    CELL_TEST_ITEM.id,
+                    CELL_TEST_ITEM.damage
+                )
+            )
+        )
 
-  for index, summary in ipairs(summaries) do
-    writeLine(string.format(
-      "#%d %s | %s | primary=%s | items=%d | total=%s | craftables=%d | method=%s",
-      index,
-      summary.componentType,
-      summary.address,
-      summary.primary and "YES" or "NO",
-      summary.nonZeroEntries,
-      tostring(summary.totalAmount),
-      summary.craftables,
-      tostring(summary.method or "-")
-    ))
+        add(
+            "Железных слитков: "
+            .. tostring(
+                networkAmount(
+                    info,
+                    MAIN_TEST_ITEM.id,
+                    MAIN_TEST_ITEM.damage
+                )
+            )
+        )
 
-    if not recommended
-      or summary.nonZeroEntries
-        > recommended.nonZeroEntries
-      or (
-        summary.nonZeroEntries
-          == recommended.nonZeroEntries
-        and summary.craftables
-          > recommended.craftables
-      )
-    then
-      recommended = summary
+        if #info.sample > 0 then
+            add("")
+            add("Пример предметов сети:")
+
+            for _, item in ipairs(info.sample) do
+                add(
+                    "- "
+                    .. tostring(item.name)
+                    .. " | damage="
+                    .. tostring(item.damage)
+                    .. " | количество="
+                    .. tostring(item.amount)
+                )
+            end
+        end
+
+        add("")
+        add("canExport:")
+
+        for _, direction in ipairs(DIRECTIONS) do
+            local ok, result = invoke(
+                address,
+                "canExport",
+                direction
+            )
+
+            add(
+                "- "
+                .. direction
+                .. ": вызов="
+                .. tostring(ok)
+                .. ", результат="
+                .. tostring(result)
+            )
+        end
+
+        add("")
+        add("Конфигурация интерфейса:")
+
+        if methodExists(
+            address,
+            "getInterfaceConfiguration"
+        ) then
+            local ok, config = invoke(
+                address,
+                "getInterfaceConfiguration"
+            )
+
+            if ok then
+                add(safeSerialize(config))
+            else
+                add("Ошибка: " .. tostring(config))
+            end
+        else
+            add("Метод отсутствует")
+        end
+
+        add("")
+        add("Ключевые методы:")
+
+        local importantMethods = {
+            "exportItem",
+            "pullItem",
+            "canExport",
+            "getItemsInNetwork",
+            "getAvailableItems",
+            "getItemDetail",
+            "getInterfaceConfiguration",
+            "setInterfaceConfiguration",
+            "getInventorySize",
+            "getStackInSlot"
+        }
+
+        for _, methodName in ipairs(importantMethods) do
+            add(
+                "- "
+                .. methodName
+                .. ": "
+                .. tostring(
+                    methodExists(address, methodName)
+                )
+            )
+        end
+
+        subSeparator()
     end
-  end
 
-  writeLine("")
+    if number == 0 then
+        add("ME INTERFACE НЕ НАЙДЕН")
+    end
 
-  if recommended then
-    writeLine(
-      "Предположительно основной интерфейс магазина:"
+    return results
+end
+
+local function classifyInterfaces(interfaceResults)
+    if #interfaceResults < 2 then
+        return nil, nil, "найдено меньше двух ME Interface"
+    end
+
+    local sorted = {}
+
+    for _, info in ipairs(interfaceResults) do
+        sorted[#sorted + 1] = info
+    end
+
+    table.sort(
+        sorted,
+        function(a, b)
+            if a.recordCount == b.recordCount then
+                return a.totalAmount < b.totalAmount
+            end
+
+            return a.recordCount < b.recordCount
+        end
     )
-    writeLine(
-      "ME_INTERFACE_ADDRESS = \""
-      .. tostring(recommended.address)
-      .. "\""
+
+    local cellInfo = sorted[1]
+    local mainInfo = sorted[#sorted]
+
+    if cellInfo.address == mainInfo.address then
+        return nil, nil, "не удалось разделить интерфейсы"
+    end
+
+    return cellInfo, mainInfo, nil
+end
+
+local function activeDirectionTest(
+    interfaceInfo,
+    bridge,
+    testItem,
+    expectedChestSide
+)
+    local result = {
+        direction = nil,
+        chestSide = nil,
+        rollback = false,
+        message = nil
+    }
+
+    if not ACTIVE_DIRECTION_TEST then
+        result.message = "активный тест выключен"
+        return result
+    end
+
+    if not interfaceInfo then
+        result.message = "интерфейс не определён"
+        return result
+    end
+
+    if not bridge then
+        result.message =
+            "не найден Transposer с двумя сундуками-метками"
+        return result
+    end
+
+    local networkItem = findNetworkItem(
+        interfaceInfo,
+        testItem.id,
+        testItem.damage
     )
 
-    if primaryAddress
-      and recommended.address ~= primaryAddress
-    then
-      writeLine("")
-      writeLine("ВАЖНО:")
-      writeLine(
-        "component.me_interface выбрал другой компонент."
-      )
-      writeLine(
-        "Это объясняет нулевое количество и пустые шкалы."
-      )
-      writeLine(
-        "В магазине нужно использовать component.proxy по точному адресу."
-      )
+    if not networkItem then
+        result.message =
+            "в сети нет тестового предмета: "
+            .. tostring(testItem.label)
+        return result
     end
-  end
+
+    local fingerprint = makeFingerprint(networkItem)
+
+    local firstSide = bridge.firstChestSide
+    local secondSide = bridge.secondChestSide
+    local transposer = bridge.proxy
+
+    for _, direction in ipairs(DIRECTIONS) do
+        local okCan, canExport = invoke(
+            interfaceInfo.address,
+            "canExport",
+            direction
+        )
+
+        if okCan and canExport == true then
+            local firstBefore =
+                countItemInInventory(
+                    transposer,
+                    firstSide,
+                    testItem.id,
+                    testItem.damage
+                )
+
+            local secondBefore =
+                countItemInInventory(
+                    transposer,
+                    secondSide,
+                    testItem.id,
+                    testItem.damage
+                )
+
+            local okExport, exportResult, extraResult =
+                invoke(
+                    interfaceInfo.address,
+                    "exportItem",
+                    fingerprint,
+                    direction,
+                    1
+                )
+
+            if okExport then
+                sleep(0.3)
+
+                local firstAfter =
+                    countItemInInventory(
+                        transposer,
+                        firstSide,
+                        testItem.id,
+                        testItem.damage
+                    )
+
+                local secondAfter =
+                    countItemInInventory(
+                        transposer,
+                        secondSide,
+                        testItem.id,
+                        testItem.damage
+                    )
+
+                local foundSide = nil
+
+                if firstAfter > firstBefore then
+                    foundSide = firstSide
+                elseif secondAfter > secondBefore then
+                    foundSide = secondSide
+                end
+
+                if foundSide ~= nil then
+                    result.direction = direction
+                    result.chestSide = foundSide
+
+                    local slot = findItemSlot(
+                        transposer,
+                        foundSide,
+                        testItem.id,
+                        testItem.damage
+                    )
+
+                    if slot then
+                        local okPull, pullResult =
+                            invoke(
+                                interfaceInfo.address,
+                                "pullItem",
+                                direction,
+                                slot,
+                                1
+                            )
+
+                        sleep(0.3)
+
+                        local remaining =
+                            countItemInInventory(
+                                transposer,
+                                foundSide,
+                                testItem.id,
+                                testItem.damage
+                            )
+
+                        local before =
+                            foundSide == firstSide
+                            and firstBefore
+                            or secondBefore
+
+                        result.rollback =
+                            okPull
+                            and resultAmount(pullResult) > 0
+                            and remaining <= before
+                    end
+
+                    if foundSide ~= expectedChestSide then
+                        result.message =
+                            "предмет попал не в ожидаемый сундук"
+                    elseif not result.rollback then
+                        result.message =
+                            "направление найдено, но возврат предмета не подтверждён"
+                    else
+                        result.message = "успешно"
+                    end
+
+                    return result
+                end
+
+                local reported =
+                    resultAmount(exportResult, extraResult)
+
+                if reported > 0 then
+                    result.message =
+                        "интерфейс сообщил о перемещении, "
+                        .. "но предмет не найден в двух сундуках"
+
+                    return result
+                end
+            end
+        end
+    end
+
+    result.message = "рабочее направление не найдено"
+    return result
 end
 
-separator("ПОЧЕМУ ШКАЛЫ МОГУТ БЫТЬ ПУСТЫМИ")
+local function scanPim()
+    separator()
+    add("PIM")
+    separator()
 
-writeLine(
-  "1. При двух me_interface магазин использует только component.me_interface."
+    local found = 0
+
+    for address in component.list("pim") do
+        found = found + 1
+        add("Адрес: " .. tostring(address))
+
+        local methods = {
+            "getInventoryName",
+            "getInventorySize",
+            "getAllStacks",
+            "getStackInSlot",
+            "pushItem"
+        }
+
+        for _, methodName in ipairs(methods) do
+            add(
+                "- "
+                .. methodName
+                .. ": "
+                .. tostring(
+                    methodExists(address, methodName)
+                )
+            )
+        end
+
+        if methodExists(address, "getInventoryName") then
+            local ok, name = invoke(
+                address,
+                "getInventoryName"
+            )
+
+            add(
+                "Текущий инвентарь: "
+                .. tostring(ok and name or "ошибка")
+            )
+        end
+
+        subSeparator()
+    end
+
+    if found == 0 then
+        add("PIM НЕ НАЙДЕН")
+    end
+end
+
+local function scanGpu()
+    separator()
+    add("ЭКРАН И ВИДЕОКАРТА")
+    separator()
+
+    if component.isAvailable("gpu") then
+        local gpu = component.gpu
+        local width, height = gpu.getResolution()
+        local maxWidth, maxHeight = gpu.maxResolution()
+
+        add(
+            "Текущее разрешение: "
+            .. tostring(width)
+            .. "x"
+            .. tostring(height)
+        )
+
+        add(
+            "Максимальное разрешение: "
+            .. tostring(maxWidth)
+            .. "x"
+            .. tostring(maxHeight)
+        )
+    else
+        add("GPU НЕ НАЙДЕНА")
+    end
+end
+
+local function scanAllComponents()
+    separator()
+    add("ВСЕ КОМПОНЕНТЫ КОМПЬЮТЕРА")
+    separator()
+
+    local list = {}
+
+    for address, componentType in component.list() do
+        list[#list + 1] = {
+            address = address,
+            componentType = componentType
+        }
+    end
+
+    table.sort(
+        list,
+        function(a, b)
+            if a.componentType == b.componentType then
+                return a.address < b.address
+            end
+
+            return a.componentType < b.componentType
+        end
+    )
+
+    for _, entry in ipairs(list) do
+        add(
+            tostring(entry.componentType)
+            .. " = "
+            .. tostring(entry.address)
+        )
+    end
+end
+
+local function saveReport()
+    local file, openError = io.open(REPORT_FILE, "w")
+
+    if not file then
+        error(
+            "Не удалось открыть отчёт: "
+            .. tostring(openError)
+        )
+    end
+
+    file:write(table.concat(report, "\n"))
+    file:write("\n")
+    file:close()
+end
+
+-- ============================================================
+-- ЗАПУСК
+-- ============================================================
+
+separator()
+add("ОТЧЁТ ОБОРУДОВАНИЯ ТЕРМИНАЛА ОБМЕННИКА")
+separator()
+add("Компьютер: " .. tostring(computer.address()))
+add("Uptime: " .. tostring(computer.uptime()))
+add("Файл отчёта: " .. REPORT_FILE)
+add(
+    "Активный тест направлений: "
+    .. tostring(ACTIVE_DIRECTION_TEST)
 )
-writeLine(
-  "   OpenComputers может выбрать не ту МЭ-сеть."
-)
-writeLine(
-  "2. Код магазина читает getItemsInNetwork()."
-)
-writeLine(
-  "   На другой реализации рабочим может быть getAvailableItems()."
-)
-writeLine(
-  "3. Активная сеть может определяться как me_bridge, а не me_interface."
-)
-writeLine(
-  "4. Интерфейс виден как компонент, но не подключён к рабочей МЭ-сети."
-)
-writeLine(
-  "5. ID или damage отслеживаемого предмета не совпадает с данными МЭ."
-)
-writeLine(
-  "6. При значении 0 из 5M заполненная часть шкалы закономерно имеет длину 0."
+add("")
+
+scanAllComponents()
+scanGpu()
+scanPim()
+
+local transposerResults = scanTransposers()
+local bridge = chooseBridgeTransposer(
+    transposerResults
 )
 
-separator("СЛЕДУЮЩИЙ ШАГ")
+local interfaceResults = scanInterfaces()
 
-writeLine(
-  "Отправьте содержимое этого файла:"
-)
-writeLine(
-  REPORT_PATH
-)
-writeLine("")
-writeLine(
-  "Команда просмотра:"
-)
-writeLine(
-  "cat " .. REPORT_PATH
-)
+local cellInfo, mainInfo, classifyError =
+    classifyInterfaces(interfaceResults)
 
-if saveReport() then
-  writeLine("")
-  writeLine("ГОТОВО: отчёт сохранён.")
+separator()
+add("АВТООПРЕДЕЛЕНИЕ ДВУХ МЭ-СЕТЕЙ")
+separator()
+
+if classifyError then
+    add("Ошибка: " .. tostring(classifyError))
 else
-  writeLine("")
-  writeLine("ОШИБКА: отчёт не удалось сохранить.")
+    add(
+        "Предполагаемая сеть ME Chest: "
+        .. tostring(cellInfo.address)
+    )
+    add(
+        "Видов предметов: "
+        .. tostring(cellInfo.recordCount)
+    )
+
+    add("")
+    add(
+        "Предполагаемая основная МЭ-сеть: "
+        .. tostring(mainInfo.address)
+    )
+    add(
+        "Видов предметов: "
+        .. tostring(mainInfo.recordCount)
+    )
 end
+
+local cellTest = activeDirectionTest(
+    cellInfo,
+    bridge,
+    CELL_TEST_ITEM,
+    bridge and bridge.firstChestSide or nil
+)
+
+local mainTest = activeDirectionTest(
+    mainInfo,
+    bridge,
+    MAIN_TEST_ITEM,
+    bridge and bridge.secondChestSide or nil
+)
+
+separator()
+add("РЕЗУЛЬТАТ АКТИВНОГО ТЕСТА НАПРАВЛЕНИЙ")
+separator()
+
+add("Сеть ME Chest:")
+add(
+    "- направление: "
+    .. tostring(cellTest.direction or "UNKNOWN")
+)
+add(
+    "- сундук у Transposer: "
+    .. tostring(
+        cellTest.chestSide ~= nil
+        and (
+            tostring(
+                SIDE_NAMES[cellTest.chestSide]
+                or cellTest.chestSide
+            )
+            .. " ("
+            .. tostring(cellTest.chestSide)
+            .. ")"
+        )
+        or "UNKNOWN"
+    )
+)
+add("- возврат предмета: " .. tostring(cellTest.rollback))
+add("- результат: " .. tostring(cellTest.message))
+
+add("")
+add("Основная МЭ-сеть:")
+add(
+    "- направление: "
+    .. tostring(mainTest.direction or "UNKNOWN")
+)
+add(
+    "- сундук у Transposer: "
+    .. tostring(
+        mainTest.chestSide ~= nil
+        and (
+            tostring(
+                SIDE_NAMES[mainTest.chestSide]
+                or mainTest.chestSide
+            )
+            .. " ("
+            .. tostring(mainTest.chestSide)
+            .. ")"
+        )
+        or "UNKNOWN"
+    )
+)
+add("- возврат предмета: " .. tostring(mainTest.rollback))
+add("- результат: " .. tostring(mainTest.message))
+
+separator()
+add("ГОТОВЫЙ БЛОК НАСТРОЕК")
+separator()
+
+add(
+    'local CELL_ME_ADDRESS = "'
+    .. tostring(
+        cellInfo and cellInfo.address or "UNKNOWN"
+    )
+    .. '"'
+)
+
+add(
+    'local MAIN_ME_ADDRESS = "'
+    .. tostring(
+        mainInfo and mainInfo.address or "UNKNOWN"
+    )
+    .. '"'
+)
+
+add(
+    'local TRANSPOSER_ADDRESS = "'
+    .. tostring(
+        bridge and bridge.address or "UNKNOWN"
+    )
+    .. '"'
+)
+
+add(
+    "local FIRST_CHEST_SIDE = "
+    .. tostring(
+        bridge
+        and bridge.firstChestSide
+        or "UNKNOWN"
+    )
+    .. " -- "
+    .. tostring(
+        bridge
+        and bridge.firstChestSide ~= nil
+        and SIDE_NAMES[bridge.firstChestSide]
+        or "UNKNOWN"
+    )
+)
+
+add(
+    "local SECOND_CHEST_SIDE = "
+    .. tostring(
+        bridge
+        and bridge.secondChestSide
+        or "UNKNOWN"
+    )
+    .. " -- "
+    .. tostring(
+        bridge
+        and bridge.secondChestSide ~= nil
+        and SIDE_NAMES[bridge.secondChestSide]
+        or "UNKNOWN"
+    )
+)
+
+add(
+    'local CELL_CHEST_DIRECTION = "'
+    .. tostring(cellTest.direction or "UNKNOWN")
+    .. '"'
+)
+
+add(
+    'local MAIN_CHEST_DIRECTION = "'
+    .. tostring(mainTest.direction or "UNKNOWN")
+    .. '"'
+)
+
+separator()
+add("ВАЖНЫЕ ПРЕДУПРЕЖДЕНИЯ")
+separator()
+
+if not bridge then
+    add(
+        "- Не найден Transposer, возле которого "
+        .. "одновременно лежат земля и булыжник."
+    )
+end
+
+if cellTest.direction == nil then
+    add(
+        "- Не определено направление интерфейса ME Chest."
+    )
+end
+
+if mainTest.direction == nil then
+    add(
+        "- Не определено направление основного интерфейса."
+    )
+end
+
+if cellTest.direction
+    and not cellTest.rollback then
+
+    add(
+        "- Проверь первый сундук: тестовый предмет "
+        .. "мог остаться внутри."
+    )
+end
+
+if mainTest.direction
+    and not mainTest.rollback then
+
+    add(
+        "- Проверь второй сундук: тестовый предмет "
+        .. "мог остаться внутри."
+    )
+end
+
+add("")
+add("После запуска отправь мне файл:")
+add(REPORT_FILE)
+
+saveReport()
+
+add("")
+separator()
+add("СКАНИРОВАНИЕ ЗАВЕРШЕНО")
+separator()
+add("Отчёт сохранён:")
+add(REPORT_FILE)
